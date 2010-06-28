@@ -144,110 +144,124 @@ if options.clean:
 	for x in data:
 		for z in range(x['count']):
 			original.append(x['az']+x['el'])
-		original.append(0)	
+		#original.append(0)	
 	
 	prev = 0
 	next = 0
-	#this loop will do this pass a few times, and remove the smaller values first
-	for size in range(20, 121, 20):
+	#this loop will make the algorithm do a few passes
+	for passnum in range(5):
 		#go through the list of dictionaries
-		#if size == 120:
-			#c.execute("update `positions` set `az`=361,`el`=361 where count<120")
 		for i, e in enumerate(data):
 			if i == len(data)-1:
 				next = i
 			else:
 				next = i+1
+			if i == 0:
+				prev = 0
+			else:
+				prev = i-1
 			ne = data[next]
 			pe = data[prev]
 			#use = prev #default is to extend the previous entry
 			#rem = i
-			if e['count'] < size:
-				if pe['az'] == ne['az'] and pe['el'] == ne['el']:
-					data[i]['count'] = pe['count'] + e['count'] + ne['count']
-					data[i]['start'] = pe['start']
-					data[i]['end'] = ne['end']
-					data[i]['az'] = ne['az']
-					data[i]['el'] = ne['el']					
-					c.execute("delete from `positions` where rowid=? or rowid=?",(data[prev]['rowid'],data[next]['rowid']))
-			
-					c.execute("update `positions` set "+tf.sqlDataString(data[i])+" where rowid=?", (data[i]['rowid'],))
-					del data[next], data[prev]
+			if e['count'] < 100:
+				# i want the first pass to just fill up the blanks in the slewing frames
+				if passnum < 2:
+					if pe['az'] == ne['az'] and pe['el'] == ne['el'] and pe['az'] == 361 and pe['el'] == 361:
+						e['count'] += pe['count'] + ne['count']
+						e['start'] = pe['start']
+						e['end'] = ne['end']
+						e['az'] = ne['az']
+						e['el'] = ne['el']					
+						c.execute("delete from `positions` where rowid=? or rowid=?",(pe['rowid'],ne['rowid']))
+						del data[next], data[prev]
 				else:
-					if e['az'] == ne['az'] and e['el'] == ne['el']:
-						data[i]['count'] += ne['count']
-						data[i]['end'] = ne['end']
-						c.execute("delete from `positions` where rowid=?",(data[next]['rowid'],))
-						del data[next]			
-			
-					if e['az'] == pe['az'] and e['el'] == pe['el']:
-						data[i]['count'] += pe['count']
-						data[i]['start'] = pe['start']
-						c.execute("delete from `positions` where rowid=?",(data[prev]['rowid'],))
+					if pe['az'] == ne['az'] and pe['el'] == ne['el']:
+						e['count'] += pe['count'] + ne['count']
+						e['start'] = pe['start']
+						e['end'] = ne['end']
+						e['az'] = ne['az']
+						e['el'] = ne['el']					
+						c.execute("delete from `positions` where rowid=? or rowid=?",(pe['rowid'],ne['rowid']))
+						del data[next], data[prev]
+					elif e['az'] == ne['az'] and e['el'] == ne['el']:
+						e['az'] = ne['az']
+						e['el'] = ne['el']
+						e['end'] = ne['end']
+						e['count'] += ne['count']
+						c.execute("delete from `positions` where rowid=?",(ne['rowid'],))
+						del data[next]
+					elif e['az'] == pe['az'] and e['el'] == pe['el']:
+						e['az'] = pe['az']
+						e['el'] = pe['el']
+						e['count'] += pe['count']
+						e['start'] = pe['start']
+						c.execute("delete from `positions` where rowid=?",(pe['rowid'],))
 						del data[prev]
-				'''
-				print "########"
-				print pe, e, ne
-				#if pe['az']==ne['az'] and pe['el']==ne['el']: #default: either side would be fine
-				#lowest priority goes first...
-				if ne['az'] == 361 and ne['el'] == 361:
-					use = next
-				if pe['az'] == 361 and pe['el'] == 361:
-					use = prev
-
-				if ne['az'] == e['az'] and ne['el'] == e['el']:
-					use = next
-				if pe['az'] == e['az'] and pe['el'] == e['el']:
-					use = prev
-
-				if i == 0: #incase looking at first entry
-					use = next
-				print "------"
-				print data[use]
-				start
-				if use == next:
-					if pe['az'] = ne['az'] and pe['el'] = ne['el']: #if this is true i can merge both sides
-						data[use]['start'] = pe['start']
+					elif ne['az'] == 361 and ne['el'] == 361:
+						e['az'] = ne['az']
+						e['el'] = ne['el']
+						e['end'] = ne['end']
+						e['count'] += ne['count']
+						c.execute("delete from `positions` where rowid=?",(ne['rowid'],))
+						del data[next]
+					elif pe['az'] == 361 and pe['el'] == 361:
+						e['az'] = pe['az']
+						e['el'] = pe['el']
+						e['count'] += pe['count']
+						e['start'] = pe['start']
+						c.execute("delete from `positions` where rowid=?",(pe['rowid'],))
+						del data[prev]
 					else:
-						data[use]['start'] = e['start']
-					if i != 0:
-						data[use]['count'] += pe['count']
-						rem = prev
-				else:
-					data[use]['end'] = ne['end']
-					if i != len(data)-1: #not the last element
-						data[use]['count'] += ne['count']
-						rem = next
-				data[use]['count'] += e['count']
-				print data[use]
-				#print "e:", e
-				c.execute("update `positions` set "+tf.sqlDataString(data[use])+" where rowid=?", (data[use]['rowid'],))
-				c.execute("delete from `positions` where rowid=? or rowid=?",(e['rowid'], data[rem]['rowid']))
-				if rem != i:
-					del data[i], data[rem]
-				else:
-					del data[i]
-				'''
-			prev = i
-
-	show = list()
-	for x in data:
-		for z in range(x['count']):
-			show.append(x['az']+x['el'])
-		show.append(0)	
-	#draw the graph
-	fig = plt.figure()
-	ax = fig.add_subplot(111)
-	ax.plot(show, linewidth=2)
-	ax.plot(original)
-	plt.show()
+						e['az'] = 361
+						e['el'] = 361
+				c.execute("update `positions` set "+tf.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+					
+			
+			'''
+			#this doesnt work for some reason
+			if e['az'] == ne['az'] and e['el'] == ne['el'] and i != next:
+				e['count'] += ne['count']
+				e['end'] = ne['end']
+				c.execute("delete from `positions` where rowid=?",(ne['rowid'],))
+				del data[next]
+				c.execute("update `positions` set "+tf.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+			elif e['az'] == pe['az'] and e['el'] == pe['el'] and i != prev:
+				e['count'] += pe['count']
+				e['start'] = pe['start']
+				c.execute("delete from `positions` where rowid=?",(pe['rowid'],))
+				del data[prev]
+				c.execute("update `positions` set "+tf.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+			'''
+	if options.graph:	
+		show = list()
+		for x in data:
+			for z in range(x['count']):
+				show.append(x['az']+x['el'])
+			#show.append(0)	
+		#draw the graph
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+		ax.plot(show, linewidth=2)
+		ax.plot(original, linewidth=1)
+		plt.show()
 
 	#_END OF DATA CLEANUP_#
 
+#start running some stats
+c.execute("select rowid,* from `positions` where az != 361 and el != 361")
+data = tf.sqlDict(c)
+passStart = data[0]['start']
+lastel = data[0]['el']
+for i, e in enumerate(data):
+	if lastel != e['el']:
+		print lastel
+		lastel = e['el']
+		print lastel
 
 if options.graph:
 	#this gathers data for the graph
-	c.execute("select rowid,* from `positions` ")
+	c.execute("select rowid,* from `positions` where az != 361 ")
 	data = tf.sqlDict(c)
 	show = list()
 	for x in data:
