@@ -4,6 +4,7 @@ import uavdata as ud
 import sqlite3
 
 import testfunc as tf
+import matplotlib.pyplot as plt
 
 import fnmatch, os
 def locate(pattern, root=os.curdir):
@@ -47,11 +48,11 @@ c.row_factory = sqlite3.Row
 #------------------#
 if options.rebuild:
 	c.execute("drop table positions")
-c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
+c.execute("create table `positions` (az SMALLINT, el SMALLINT, start DOUBLE, end DOUBLE, count SMALLINT)")
 
 if options.rebuild:
 	c.execute("drop table frames")
-c.execute("create table `frames` (ltms INT, az SMALLINT, el SMALLINT, file TEXT, ix INT)")
+c.execute("create table `frames` (ltms DOUBLE, az SMALLINT, el SMALLINT, file TEXT, ix INT)")
 #c.execute("create table `frames` (LTime SMALLINT,MSTime SMALLINT,FrameCounter SMALLINT,DroppedFrames SMALLINT,FrameSizeX SMALLINT,FrameSizeY SMALLINT,TargetRange SMALLINT,Altitude SMALLINT,FocusStepOffset SMALLINT,BytesPerPixel SMALLINT,OffsetToImageData SMALLINT,CameraUsed SMALLINT,FilterWheelPosition SMALLINT,FocusMotorIndex SMALLINT,IntegrationTimeNS SMALLINT,TargetDeltaRange SMALLINT,TargetAzimuth INT,TargetElevation INT,TargetLatitude INT,TargetLongitutde INT,TargetAltitude INT,AircraftLatitude INT,AircraftLongitude INT,AircraftAltitude INT)")
 
 
@@ -136,9 +137,15 @@ for img in imgfiles:
 if options.clean:
 	print "Cleaning up the data"
 
-	import matplotlib.pyplot as plt
 	c.execute("select rowid,* from `positions` ")
 	data = tf.sqlDict(c)
+
+	original = list()
+	for x in data:
+		for z in range(x['count']):
+			original.append(x['az']+x['el'])
+		original.append(0)	
+	
 	prev = 0
 	next = 0
 	#this loop will do this pass a few times, and remove the smaller values first
@@ -153,9 +160,34 @@ if options.clean:
 				next = i+1
 			ne = data[next]
 			pe = data[prev]
-			use = prev #default is to extend the previous entry
-			rem = i
+			#use = prev #default is to extend the previous entry
+			#rem = i
 			if e['count'] < size:
+				if pe['az'] == ne['az'] and pe['el'] == ne['el']:
+					data[i]['count'] = pe['count'] + e['count'] + ne['count']
+					data[i]['start'] = pe['start']
+					data[i]['end'] = ne['end']
+					data[i]['az'] = ne['az']
+					data[i]['el'] = ne['el']					
+					c.execute("delete from `positions` where rowid=? or rowid=?",(data[prev]['rowid'],data[next]['rowid']))
+			
+					c.execute("update `positions` set "+tf.sqlDataString(data[i])+" where rowid=?", (data[i]['rowid'],))
+					del data[next], data[prev]
+				else:
+					if e['az'] == ne['az'] and e['el'] == ne['el']:
+						data[i]['count'] += ne['count']
+						data[i]['end'] = ne['end']
+						c.execute("delete from `positions` where rowid=?",(data[next]['rowid'],))
+						del data[next]			
+			
+					if e['az'] == pe['az'] and e['el'] == pe['el']:
+						data[i]['count'] += pe['count']
+						data[i]['start'] = pe['start']
+						c.execute("delete from `positions` where rowid=?",(data[prev]['rowid'],))
+						del data[prev]
+				'''
+				print "########"
+				print pe, e, ne
 				#if pe['az']==ne['az'] and pe['el']==ne['el']: #default: either side would be fine
 				#lowest priority goes first...
 				if ne['az'] == 361 and ne['el'] == 361:
@@ -170,9 +202,14 @@ if options.clean:
 
 				if i == 0: #incase looking at first entry
 					use = next
-
+				print "------"
+				print data[use]
+				start
 				if use == next:
-					data[use]['start'] = pe['start']
+					if pe['az'] = ne['az'] and pe['el'] = ne['el']: #if this is true i can merge both sides
+						data[use]['start'] = pe['start']
+					else:
+						data[use]['start'] = e['start']
 					if i != 0:
 						data[use]['count'] += pe['count']
 						rem = prev
@@ -182,15 +219,31 @@ if options.clean:
 						data[use]['count'] += ne['count']
 						rem = next
 				data[use]['count'] += e['count']
+				print data[use]
+				#print "e:", e
 				c.execute("update `positions` set "+tf.sqlDataString(data[use])+" where rowid=?", (data[use]['rowid'],))
 				c.execute("delete from `positions` where rowid=? or rowid=?",(e['rowid'], data[rem]['rowid']))
-				del data[i]
-				if rem in data:
-					del data[rem]
+				if rem != i:
+					del data[i], data[rem]
+				else:
+					del data[i]
+				'''
 			prev = i
 
+	show = list()
+	for x in data:
+		for z in range(x['count']):
+			show.append(x['az']+x['el'])
+		show.append(0)	
+	#draw the graph
+	fig = plt.figure()
+	ax = fig.add_subplot(111)
+	ax.plot(show, linewidth=2)
+	ax.plot(original)
+	plt.show()
 
 	#_END OF DATA CLEANUP_#
+
 
 if options.graph:
 	#this gathers data for the graph
@@ -207,6 +260,7 @@ if options.graph:
 	ax = fig.add_subplot(111)
 	ax.plot(show, linewidth=1)
 	plt.show()
+
 
 # Save (commit) the changes
 conn.commit()

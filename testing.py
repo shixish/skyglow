@@ -292,6 +292,7 @@ def writeimage(entry, resultsdir):
 	threshold = 5
 	regular = np.clip(dtfl,tmean-tstd*threshold,tmean+tstd*threshold)
 	
+	#this also works...	
 	'''
 	(n, bins) = np.histogram(dtfl, bins=100)
 	tmin = 0
@@ -307,10 +308,12 @@ def writeimage(entry, resultsdir):
 				tmax = i
 				break
 	print "min:", bins[tmin], "max:", bins[tmax]
+	
+	histodata = np.clip(dtfl,bins[tmin],bins[tmax])
 	'''
 	
 	#more complicated, more data lost
-	nostar = medianfilt2(dtfl, 9)
+	#nostar = medianfilt2(dtfl, 9)
 	
 	'''
 	print 'rgmin:', regular.min()
@@ -323,23 +326,31 @@ def writeimage(entry, resultsdir):
 	fig = plt.figure()
 	ax = fig.add_subplot(111)
 	(n, bins) = np.histogram(dtfl, bins=100)
-	ax.plot(.5*(bins[1:]+bins[:-1]), n)
+	#ax.plot(.5*(bins[1:]+bins[:-1]), n)
 	plt.show()
 	'''
-
+	
 	fig = plt.figure()
 	ax = fig.add_subplot(111)
-	ax.plot(regular)
+	#ax.plot(regular)
 	#ax.plot([bins[tmin]]*len(regular), linewidth=2)
 	#ax.plot([bins[tmax]]*len(regular), linewidth=2)
 	ax.plot([regular.mean()+regular.std()]*len(regular), linewidth=2)
 	ax.plot([regular.mean()-regular.std()]*len(regular), linewidth=2)
 
+	'''
+	ax.plot(histodata)
+	ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
+	ax.plot([histodata.mean()-histodata.std()]*len(histodata), linewidth=2)
+	'''
+
+	'''
 	ax.plot(nostar)
 	ax.plot([nostar.mean()+nostar.std()]*len(nostar), linewidth=2)
 	ax.plot([nostar.mean()-nostar.std()]*len(nostar), linewidth=2)
-	#print n, bins
+	'''	
 	plt.show()
+	
 
 	# regular image scaled per pass
 		
@@ -367,9 +378,7 @@ def writeimage(entry, resultsdir):
 
 	im = Image.fromarray(np.array(use, dtype='uint8'))
 	flname = str(entry['ix'])+'-'+prefix+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(fm['LTime']))+'.png'
-	flpath = op.join(rgimagesdir, flname)
-	print flpath
-	im.save(flpath)
+	im.save(op.join(rgimagesdir, flname))
 	#p['regularpath'] = flpath
 	'''
 	# regular image scaled per night
@@ -411,5 +420,5 @@ def writeimage(entry, resultsdir):
 
 	return cat00
 	'''
-for x in data:
-	writeimage(x, rootdir)
+#for x in data:
+	#writeimage(x, rootdir)
