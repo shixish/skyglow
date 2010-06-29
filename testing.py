@@ -5,6 +5,10 @@ import uavdata as ud
 import sqlite3
 import testfunc as tf
 
+#used for vids
+import glob
+import subprocess
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -305,6 +309,14 @@ def writeimage(entry, resultsdir):
 	tstd =  dtfl.std()
 	threshold = 5
 	regular = np.clip(dtfl,tmean-tstd*threshold,tmean+tstd*threshold)
+	spikeless = dtfl
+	factor = 3
+	for c,y in enumerate(spikeless):
+		for i,e in enumerate(y):
+			if e > tmean+tstd*factor or e < tmean-tstd*factor:
+				spikeless[c][i] = tmean
+				
+				#print i, e
 	
 	#this also works...	
 	'''
@@ -343,15 +355,16 @@ def writeimage(entry, resultsdir):
 	#ax.plot(.5*(bins[1:]+bins[:-1]), n)
 	plt.show()
 	'''
-	'''
+	
 	fig = plt.figure()
 	ax = fig.add_subplot(111)
-	#ax.plot(regular)
-	#ax.plot([bins[tmin]]*len(regular), linewidth=2)
-	#ax.plot([bins[tmax]]*len(regular), linewidth=2)
-	ax.plot([regular.mean()+regular.std()]*len(regular), linewidth=2)
-	ax.plot([regular.mean()-regular.std()]*len(regular), linewidth=2)
-	'''
+	use = spikeless
+	
+	ax.plot(use)
+	ax.plot([use.mean()+use.std()]*len(use), linewidth=2)
+	ax.plot([use.mean()-use.std()]*len(use), linewidth=2)
+	
+	
 	'''
 	ax.plot(histodata)
 	ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
@@ -381,7 +394,7 @@ def writeimage(entry, resultsdir):
 	dt08 = np.array(dtim, dtype='uint8')
 	'''
 
-	use = regular
+	#use = regular
 	prefix = "rg"
 	#stretch values across 0-255
 	tmin = use.min()
@@ -434,12 +447,47 @@ def writeimage(entry, resultsdir):
 
 	return cat00
 	'''
-c.execute("select rowid,* from `frames` LIMIT 1000,200")
+def makevid(imgdir, viddir):
+	if not op.isdir(imgdir):
+		raise RuntimeError('createposnvideos: imgdir dne: ', imgdir)
+	if not op.isdir(viddir):
+		os.makedirs(viddir)
+	imgsglb = op.join(imgdir, '*.png')
+	imgpths = glob.glob(imgsglb)
+	if len(imgpths) == 0:
+		raise RuntimeError('createposnvideos: no files in imgdir')
+	imgpths.sort()
+	imgbnm = op.basename(imgpths[0])
+	imgprf = imgbnm[:16]
+
+	cmnd = r'/usr/bin/mencoder'
+	mfarg = r'mf://' + imgsglb
+	fparg0 = '-mf'
+	fparg1 = 'fps=10'
+	otarg0 = '-o'
+	otarg1 = op.join(viddir, imgprf + '-200kbs.avi')
+	enarg0 = '-ovc'
+	enarg1 = 'lavc'
+	enarg2 = '-lavcopts'
+	enarg3 = 'vcodec=msmpeg4v2:vbitrate=200'
+
+	print('cmnd mfarg fparg otarg enarg = ')
+	print(cmnd, mfarg, fparg0, fparg1, otarg0, otarg1, enarg0, enarg1, enarg2, enarg3)
+	sys.stdout.flush()
+
+	try:
+		subprocess.check_call([cmnd, mfarg, fparg0, fparg1, otarg0, otarg1, enarg0, enarg1, enarg2, enarg3])
+	except subprocess.CalledProcessError:
+		print('FAILURE')
+		print('createposnvideos: CalledProcessError on azel: ', azel)
+	else:
+		print('SUCCESS')
+c.execute("select rowid,* from `frames` LIMIT 1000,2")
 data = tf.sqlDict(c)
 print "New data loaded: ", len(data)
 for x in data:
 	writeimage(x, rootdir)
-
+#makevid(op.join(rootdir, 'images', 'regular'), op.join(rootdir, 'video'))
 
 # Save (commit) the changes
 conn.commit()
