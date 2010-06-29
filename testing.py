@@ -39,16 +39,35 @@ c.row_factory = sqlite3.Row
 #DATA RETRIEVAL#
 ################
 
-#  randomish frame action
-
 
 #  "bad frames"
 #c.execute("select frames.* from `positions`,`frames` where (positions.count < 120) and (frames.lt >= positions.start and frames.lt <= positions.end) GROUP BY (frames.lt)")
 
-c.execute("select * from `frames` LIMIT 1000,2")
-data = tf.sqlDict(c)
-print "New data loaded: ", len(data)
 
+c.execute("drop table passes")
+c.execute("create table `passes` (start DOUBLE UNIQUE, end DOUBLE UNIQUE)")
+
+#start running some stats
+c.execute("select rowid,* from `positions` where az != 361 and el != 361")
+data = tf.sqlDict(c)
+firstdata = data[0]
+counts = []
+lastdata = data[0]
+passdata = []
+for i, e in enumerate(data):
+	counts.append(e['el'])
+	if e['el'] > lastdata['el']: #new pass
+		print "pass from: ", firstdata['start'], "to", lastdata['end']
+		c.execute("insert into `passes` (start, end) values (?,?)", (firstdata['start'], lastdata['end']))
+		firstdata = e
+	lastdata = e
+c.execute("insert into `passes` (start, end) values (?,?)", (firstdata['start'], lastdata['end']))
+print "last pass from: ", firstdata['start'], "to", lastdata['end']
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+ax.plot(counts)
+plt.show()
 
 
 '''
@@ -145,12 +164,7 @@ for x in vals:
 #conditional insert commands
 #INSERT INTO <table> (field1, field2...) VALUES (value1, value2...) WHERE (SELECT COUNT(*) FROM <table> WHERE <ColumnToCheck> = <ValueToCompare>) > 0;
 
-# Save (commit) the changes
-conn.commit()
 
-# We can also close the cursor if we are done with it
-c.close()
-conn.close()
 
 
 ######################
@@ -329,7 +343,7 @@ def writeimage(entry, resultsdir):
 	#ax.plot(.5*(bins[1:]+bins[:-1]), n)
 	plt.show()
 	'''
-	
+	'''
 	fig = plt.figure()
 	ax = fig.add_subplot(111)
 	#ax.plot(regular)
@@ -337,7 +351,7 @@ def writeimage(entry, resultsdir):
 	#ax.plot([bins[tmax]]*len(regular), linewidth=2)
 	ax.plot([regular.mean()+regular.std()]*len(regular), linewidth=2)
 	ax.plot([regular.mean()-regular.std()]*len(regular), linewidth=2)
-
+	'''
 	'''
 	ax.plot(histodata)
 	ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
@@ -420,5 +434,16 @@ def writeimage(entry, resultsdir):
 
 	return cat00
 	'''
-#for x in data:
-	#writeimage(x, rootdir)
+c.execute("select rowid,* from `frames` LIMIT 1000,200")
+data = tf.sqlDict(c)
+print "New data loaded: ", len(data)
+for x in data:
+	writeimage(x, rootdir)
+
+
+# Save (commit) the changes
+conn.commit()
+
+# We can also close the cursor if we are done with it
+c.close()
+conn.close()

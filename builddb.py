@@ -48,16 +48,17 @@ c.row_factory = sqlite3.Row
 #------------------#
 if options.rebuild:
 	c.execute("drop table positions")
-c.execute("create table `positions` (az SMALLINT, el SMALLINT, start DOUBLE, end DOUBLE, count SMALLINT)")
+c.execute("create table `positions` (az SMALLINT, el SMALLINT, start DOUBLE UNIQUE, end DOUBLE UNIQUE, count SMALLINT)")
 
 if options.rebuild:
 	c.execute("drop table frames")
-c.execute("create table `frames` (ltms DOUBLE, az SMALLINT, el SMALLINT, file TEXT, ix INT)")
+c.execute("create table `frames` (ltms DOUBLE UNIQUE, az SMALLINT, el SMALLINT, file TEXT, ix INT)")
 #c.execute("create table `frames` (LTime SMALLINT,MSTime SMALLINT,FrameCounter SMALLINT,DroppedFrames SMALLINT,FrameSizeX SMALLINT,FrameSizeY SMALLINT,TargetRange SMALLINT,Altitude SMALLINT,FocusStepOffset SMALLINT,BytesPerPixel SMALLINT,OffsetToImageData SMALLINT,CameraUsed SMALLINT,FilterWheelPosition SMALLINT,FocusMotorIndex SMALLINT,IntegrationTimeNS SMALLINT,TargetDeltaRange SMALLINT,TargetAzimuth INT,TargetElevation INT,TargetLatitude INT,TargetLongitutde INT,TargetAltitude INT,AircraftLatitude INT,AircraftLongitude INT,AircraftAltitude INT)")
 
 
 imgfiles = []
 imgfiles[:] = locate('*.img', rootdir)
+imgfiles.sort()
 print (imgfiles)
 
 
@@ -114,7 +115,7 @@ for img in imgfiles:
 		#if lastlt != lt:	
 
 		values = [ltms, az, el, img, x]
-		c.execute("insert into `frames` (ltms,az,el,file,ix) VALUES(?,?,?,?,?)", values)
+		c.execute("insert or ignore into `frames` (ltms,az,el,file,ix) VALUES(?,?,?,?,?)", values)
 
 #["LTime","MSTime","FrameCounter","DroppedFrames","FrameSizeX","FrameSizeY","TargetRange","Altitude","FocusStepOffset","BytesPerPixel","OffsetToImageData","CameraUsed","FilterWheelPosition","FocusMotorIndex","IntegrationTimeNS","TargetDeltaRange","TargetAzimuth","TargetElevation","TargetLatitude","TargetLongitutde","TargetAltitude","AircraftLatitude","AircraftLongitude","AircraftAltitude"]
 		#c.execute("insert into `frames` VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [round(d[x],1) for x in names])
@@ -248,16 +249,7 @@ if options.clean:
 
 	#_END OF DATA CLEANUP_#
 
-#start running some stats
-c.execute("select rowid,* from `positions` where az != 361 and el != 361")
-data = tf.sqlDict(c)
-passStart = data[0]['start']
-lastel = data[0]['el']
-for i, e in enumerate(data):
-	if lastel != e['el']:
-		print lastel
-		lastel = e['el']
-		print lastel
+
 
 if options.graph:
 	#this gathers data for the graph
