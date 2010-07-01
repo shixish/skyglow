@@ -1,0 +1,868 @@
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100308/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100308/video/collage-20100308-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100309/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100309/video/collage-20100309-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100310/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100310/video/collage-20100310-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100311/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100311/video/collage-20100311-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100316/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100316/video/collage-20100316-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100317/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100317/video/collage-20100317-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100318/images/collage/*.png -mf fps=1 -o /media/lavag/dataproducts/20100318/video/collage-20100318-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+
+
+
+/media/lavag/dataproducts/20100308/images/collage
+
+
+/usr/bin/mencoder mf:///media/lavag/dataproducts/20100317/meta/caches/vidimages/regular-*-*-*-2475-0300.png -mf fps=10 -o /media/lavag/dataproducts/20100317/video/regular-20100317-2475-0300-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+
+
+
+$ ipython
+
+# make pfiles our current directory so we have easy access to skyglow.py
+In [1]: cd ~/prj/pfiles
+# import the skyglow module
+In [2]: import skyglow as sg
+# import glob, as standard python library, to make it easy to get a list of our files
+In [3]: import glob
+# get a list of our files
+In [4]: filenames = glob.glob('/media/lavag/data20100308/100309/*.img')
+# how many did we get?
+In [7]: len(filenames)
+Out[7]: 81
+# let's see the first three and the last three
+In [8]: filenames[:3], filenames[-3:]
+Out[8]: 
+(['/media/lavag/data20100308/100309/100309_000.img',
+  '/media/lavag/data20100308/100309/100309_001.img',
+  '/media/lavag/data20100308/100309/100309_002.img'],
+ ['/media/lavag/data20100308/100309/100309_078.img',
+  '/media/lavag/data20100308/100309/100309_079.img',
+  '/media/lavag/data20100308/100309/100309_080.img'])
+# for this demo, just take a few of these files (the first 4) to work with
+In [11]: filenames = filenames[:4]
+In [12]: filenames
+Out[12]: 
+['/media/lavag/data20100308/100309/100309_000.img',
+ '/media/lavag/data20100308/100309/100309_001.img',
+ '/media/lavag/data20100308/100309/100309_002.img',
+ '/media/lavag/data20100308/100309/100309_003.img']
+# that looks good, let's scan the files and get a "catalog" of their contents
+# the first arg is the list of filenames and 
+# the second is where to write results files
+# the third means we do want to write the catalog to a file
+In [13]: catalog = sg.catalog(filenames, '/media/lavag/results-xxxx', True)
+# how many locations were recorded in the returned catalog?
+In [44]: len(catalog)
+Out[44]: 26
+# let's look at the first position entry
+In [45]: catalog[0]
+Out[45]: 
+{'az': 90.0,
+ 'day': 9,
+ 'el': 30.0,
+ 'framelocs': [{'begix': 0,
+                'endix': 1077,
+                'filename': '/media/lavag/data20100308/100309/100309_000.img'}],
+ 'hours': 0,
+ 'max': 59.429996,
+ 'mean': 39.348434244791669,
+ 'min': 21.0,
+ 'minutes': 3,
+ 'month': 3,
+ 'nsmax': 49.139999,
+ 'nsmean': 39.490729166666668,
+ 'nsmin': 31.814999,
+ 'nspassmax': 56.07,
+ 'nspassmean': 43.39518086751302,
+ 'nspassmin': 27.615,
+ 'nspassstdev': 3.2913644771113035,
+ 'nspicklepath': '/media/lavag/results-xxxx/caches/nostarspk/nostars-20100309-000339-000-0900-0300.pk',
+ 'nsstdev': 4.3827999665596193,
+ 'passid': 0,
+ 'passmax': 279.29999,
+ 'passmean': 43.416934204101565,
+ 'passmin': 9.5549994,
+ 'passstdev': 3.5005241993178626,
+ 'recorded_az': 90.0,
+ 'recorded_el': 30.0,
+ 'recorded_frame': {'filename': '/media/lavag/data20100308/100309/100309_000.img',
+                    'index': 539},
+ 'seconds': 39,
+ 'stdev': 4.4185127824114456,
+ 'year': 2010}
+# entry 13 shows a case where the frames for a position are split over two files
+In [47]: catalog[13]
+Out[47]: 
+{'az': 202.5,
+ 'day': 9,
+ 'el': 30.0,
+ 'framelocs': [{'begix': 12076,
+                'endix': 13010,
+                'filename': '/media/lavag/data20100308/100309/100309_001.img'},
+               {'begix': 0,
+                'endix': 883,
+                'filename': '/media/lavag/data20100308/100309/100309_002.img'}],
+ 'hours': 0,
+ 'max': 53.864998,
+ 'mean': 32.728053385416665,
+ 'min': 10.184999,
+ 'minutes': 10,
+ 'month': 3,
+ 'nsmax': 41.579998,
+ 'nsmean': 32.543704427083334,
+ 'nsmin': 27.615,
+ 'nspassmax': 57.959999,
+ 'nspassmean': 36.829757486979169,
+ 'nspassmin': 26.879999,
+ 'nspassstdev': 2.4218044160324421,
+ 'nspicklepath': '/media/lavag/results-xxxx/caches/nostarspk/nostars-20100309-001043-000-2025-0300.pk',
+ 'nsstdev': 3.4062683963570506,
+ 'passid': 0,
+ 'passmax': 429.97498,
+ 'passmean': 36.946100260416664,
+ 'passmin': 9.3449993,
+ 'passstdev': 2.7366325591417984,
+ 'recorded_az': 202.5,
+ 'recorded_el': 30.0,
+ 'recorded_frame': {'filename': '/media/lavag/data20100308/100309/100309_001.img',
+                    'index': 12986},
+ 'seconds': 43,
+ 'stdev': 3.5691134702530358,
+ 'year': 2010}
+# now we write image files, regular and no-stars, and update the catalog
+In [53]: catalogb = sg.writepositionimages(catalog, '/media/lavag/results-xxxx', True)
+# if we look in /media/lavag/results-xxxx we see:
+# 
+# ./caches
+# ./caches/catalog.pk
+# ./caches/nostarspk
+# ./caches/nostarspk/nostars-20100309-000339-000-0900-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-0000-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-0225-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-0450-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-0675-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-3150-0300.pk
+# ./caches/nostarspk/nostars-20100309-000345-000-3375-0300.pk
+# ./caches/nostarspk/nostars-20100309-000405-000-0675-0300.pk
+# ./caches/nostarspk/nostars-20100309-000438-000-0450-0300.pk
+# ./caches/nostarspk/nostars-20100309-000510-000-0225-0300.pk
+# ./caches/nostarspk/nostars-20100309-000542-000-0000-0300.pk
+# ./caches/nostarspk/nostars-20100309-000615-000-3375-0300.pk
+# ./caches/nostarspk/nostars-20100309-000647-000-3150-0300.pk
+# ./caches/nostarspk/nostars-20100309-000721-000-1350-0300.pk
+# ./caches/nostarspk/nostars-20100309-000721-000-2925-0300.pk
+# ./caches/nostarspk/nostars-20100309-000722-000-1125-0300.pk
+# ./caches/nostarspk/nostars-20100309-000722-000-1575-0300.pk
+# ./caches/nostarspk/nostars-20100309-000722-000-2025-0300.pk
+# ./caches/nostarspk/nostars-20100309-000722-000-2700-0300.pk
+# ./caches/nostarspk/nostars-20100309-000752-000-2700-0300.pk
+# ./caches/nostarspk/nostars-20100309-000834-000-1125-0300.pk
+# ./caches/nostarspk/nostars-20100309-000906-000-1350-0300.pk
+# ./caches/nostarspk/nostars-20100309-000939-000-1575-0300.pk
+# ./caches/nostarspk/nostars-20100309-001011-000-1800-0300.pk
+# ./caches/nostarspk/nostars-20100309-001043-000-2025-0300.pk
+# ./caches/nostarspk/nostars-20100309-001059-000-2250-0300.pk
+# ./caches/nostarspk/nostars-20100309-001059-000-2475-0300.pk
+# ./caches/nostarspk/nostars-20100309-001059-001-1800-0750.pk
+# ./caches/nostarspk/nostars-20100309-001100-001-0000-0900.pk
+# ./caches/nostarspk/nostars-20100309-001116-000-2250-0300.pk
+# ./caches/nostarspk/nostars-20100309-001148-000-2475-0300.pk
+# ./caches/nostarspk/nostars-20100309-001226-001-0000-0900.pk
+# ./caches/nostarspk/nostars-20100309-001305-001-2700-0750.pk
+# ./caches/nostarspk/nostars-20100309-001344-001-1800-0750.pk
+# ./caches/nostarspk/nostars-20100309-001424-001-0900-0750.pk
+# ./caches/nostarspk/nostars-20100309-001427-001-2700-0600.pk
+# ./caches/nostarspk/nostars-20100309-001436-001-0000-0600.pk
+# ./caches/nostarspk/nostars-20100309-001436-001-0450-0600.pk
+# ./caches/nostarspk/nostars-20100309-001436-001-0900-0600.pk
+# ./caches/nostarspk/nostars-20100309-001436-001-3150-0600.pk
+# ./caches/nostarspk/nostars-20100309-001437-001-0000-0750.pk
+# ./caches/nostarspk/nostars-20100309-001503-001-0000-0750.pk
+# ./caches/nostarspk/nostars-20100309-001542-001-0900-0600.pk
+# ./caches/nostarspk/nostars-20100309-001616-001-0450-0600.pk
+# ./caches/nostarspk/nostars-20100309-001651-001-0000-0600.pk
+# ./caches/nostarspk/nostars-20100309-001725-001-3150-0600.pk
+# ./caches/nostarspk/nostars-20100309-001751-001-2700-0600.pk
+# ./caches/nostarspk/nostars-20100309-000722-000-1800-0300.pk
+# ./caches/nostarspk/nostars-20100309-001059-001-2700-0750.pk
+# ./dataproducts
+# ./dataproducts/images
+# ./dataproducts/images/nostars
+# ./dataproducts/images/nostars/nostars-20100309-000939-000-1575-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000339-000-0900-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000405-000-0675-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000438-000-0450-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000510-000-0225-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000542-000-0000-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000615-000-3375-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000647-000-3150-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000721-000-2925-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000752-000-2700-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000834-000-1125-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-000906-000-1350-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-001011-000-1800-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-001043-000-2025-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-001116-000-2250-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-001148-000-2475-0300.png
+# ./dataproducts/images/nostars/nostars-20100309-001226-001-0000-0900.png
+# ./dataproducts/images/nostars/nostars-20100309-001305-001-2700-0750.png
+# ./dataproducts/images/nostars/nostars-20100309-001344-001-1800-0750.png
+# ./dataproducts/images/nostars/nostars-20100309-001424-001-0900-0750.png
+# ./dataproducts/images/nostars/nostars-20100309-001503-001-0000-0750.png
+# ./dataproducts/images/nostars/nostars-20100309-001542-001-0900-0600.png
+# ./dataproducts/images/nostars/nostars-20100309-001616-001-0450-0600.png
+# ./dataproducts/images/nostars/nostars-20100309-001651-001-0000-0600.png
+# ./dataproducts/images/nostars/nostars-20100309-001725-001-3150-0600.png
+# ./dataproducts/images/nostars/nostars-20100309-001751-001-2700-0600.png
+# ./dataproducts/images/regular
+# ./dataproducts/images/regular/regular-20100309-000939-000-1575-0300.png
+# ./dataproducts/images/regular/regular-20100309-000339-000-0900-0300.png
+# ./dataproducts/images/regular/regular-20100309-000405-000-0675-0300.png
+# ./dataproducts/images/regular/regular-20100309-000438-000-0450-0300.png
+# ./dataproducts/images/regular/regular-20100309-000510-000-0225-0300.png
+# ./dataproducts/images/regular/regular-20100309-000542-000-0000-0300.png
+# ./dataproducts/images/regular/regular-20100309-000615-000-3375-0300.png
+# ./dataproducts/images/regular/regular-20100309-000647-000-3150-0300.png
+# ./dataproducts/images/regular/regular-20100309-000721-000-2925-0300.png
+# ./dataproducts/images/regular/regular-20100309-000752-000-2700-0300.png
+# ./dataproducts/images/regular/regular-20100309-000834-000-1125-0300.png
+# ./dataproducts/images/regular/regular-20100309-000906-000-1350-0300.png
+# ./dataproducts/images/regular/regular-20100309-001011-000-1800-0300.png
+# ./dataproducts/images/regular/regular-20100309-001043-000-2025-0300.png
+# ./dataproducts/images/regular/regular-20100309-001116-000-2250-0300.png
+# ./dataproducts/images/regular/regular-20100309-001148-000-2475-0300.png
+# ./dataproducts/images/regular/regular-20100309-001226-001-0000-0900.png
+# ./dataproducts/images/regular/regular-20100309-001305-001-2700-0750.png
+# ./dataproducts/images/regular/regular-20100309-001344-001-1800-0750.png
+# ./dataproducts/images/regular/regular-20100309-001424-001-0900-0750.png
+# ./dataproducts/images/regular/regular-20100309-001503-001-0000-0750.png
+# ./dataproducts/images/regular/regular-20100309-001542-001-0900-0600.png
+# ./dataproducts/images/regular/regular-20100309-001616-001-0450-0600.png
+# ./dataproducts/images/regular/regular-20100309-001651-001-0000-0600.png
+# ./dataproducts/images/regular/regular-20100309-001725-001-3150-0600.png
+# ./dataproducts/images/regular/regular-20100309-001751-001-2700-0600.png
+
+# now we build the collages
+In [55]: sg.buildcollage(catalogb)
+/usr/lib64/python2.6/site-packages/PIL/Image.py:1076: DeprecationWarning: integer argument expected, got float
+  self.im.paste(im, box)
+/media/lavag/results-xxxx/dataproducts/images/collage/collage-20100309-000339-000.png
+/media/lavag/results-xxxx/dataproducts/images/collage/collage-20100309-001226-001.png
+
+# now we write the latex files for the catalogs
+# first the collage catalog
+In [58]: sg.writecatalogcollage(catalogb)
+# second the positions catalog
+In [62]: sg.writecatalogpositions(catalogb)
+
+# these two call write the following files
+# ./dataproducts/catalogs/collage/catalog-collage-20100309.tex
+# ./dataproducts/catalogs/positions/positions-20100309.tex
+
+# we can go run latex on them later to create the pdfs
+
+# now we write the images that will be used to make the videos
+In [90]: catalogsec = sg.writeimagesforvideo(catalogb, True)
+cntr =  0
+first frame =  {'index': 0, 'filename': '/media/lavag/data20100308/100309/100309_000.img'}
+last  frame =  {'index': 1068, 'filename': '/media/lavag/data20100308/100309/100309_000.img'}
+az el =  90.0 ,  30.0
+...................
+
+# now we write the per second data to a text file
+
+
+
+
+
+2010 march data 01
+
+datdirs = ['/media/lavag/100308',
+'/media/lavag/100310',
+'/media/lavag/100311',
+'/media/lavag/100312',
+'/media/lavag/100316',
+'/media/lavag/100317',
+'/media/lavag/data20100308/100309',
+'/media/lavag/data20100309/100309',
+'/media/lavag/data20100309/100310']
+
+ 9 0  29.0  4.24
+ 9 4  29.0  4.24
+ 9 8  29.0  4.24
+10 0  29.0  4.24
+10 6  29.5  4.24
+11 0  30.0  4.24
+11 2  31.0  4.25
+
+
+Python and Scipy Crash Course
+
+Python
+ipython
+PyQt
+PyOpenGL
+
+numpy
+scipy
+-pylab
+PIL
+matplotlib
+vtk
+
+debugging
+development flow
+writing quick apps
+OpenGL fly thru
+official python tutorial
+numpy tutorial
+classes
+lists, slicing
+plotting
+viewing images
+write blink comparator
+
+
+script the entire presentation
+screencast
+
+watch other python presentations
+
+
+
+
+TODO
+
+fix position split over two files
+howto for basic setup (Python + SciPy + Matplotlib + PIL) for Windows
+howto for latex and mencoder for Windows
+add more complete tables to catalog docs
+irradiance graphs
+tighten up position catalog doc
+do one catalog doc per pass
+check numbers
+better watermark
+watermark regular images (in addition to video images)
+
+
+
+
+Some notes on data products
+
+One set of data products was generated for each of the following nights:
+
+2009 12 14
+2009 12 15
+2009 12 16
+2010 01 18
+2010 01 19
+2010 01 20
+2010 01 21
+2010 02 11
+2010 02 17
+2010 02 18
+
+The following describes one set of data products:
+
+Two sets of images were generated: one set with stars (regular) and on set with out stars (nostars). A pair of these images was generated for each az / el position. The frame used to represent a position was selected from the the middle of the set of frames that was collected for that position. All of the images from a pass were modified in the same way. For regular images, the histogram was stretched between the mean for all of the regular frames in the pass plus or minus the three times the average standard deviation for all of the regular frames in the pass. For the nostars images, the histogram was stretched between the minimum and maximum values of all of the nostars frames for the pass.
+
+Collages were constructed for each pass using the frames representing each position. The statistics for each representative frame is overlayed on its frame, and the statistics for the pass are overlayed on the collage.
+
+The various statistics were collected and are stored in a plain text file, catalogsec.txt. This file contains whitespace seperated values. A line was recorded for each second of data and contains statistics for that frame, the representitive frame for the current position (used to generate the image files), and the current pass. These same "per second" frames were used to construct the videos.
+
+The are two types of videos: one concatenates the frames for all of the positions for the entire night in the order they were collected, and the other concatenates the frames from a single position across all of the passes for the night. The video images are overlayed with time, pass, position, file and index information. The frames in the videos are taken from one second intervals and are the same frames for which information is recorded in the catalogsec.txt file mentioned above. The frame rate for the video is 10 Hz (the default playback is speed is 10 times actual speed). Slewing frames (based on artificial az / el values of 361, 361) have been removed from all data products.
+
+There are two types of catalog documents: the first is of the collages and the second is of the representitive images for each position. Each contains one item (either collage or postion) per page. 
+
+A full pass contains 45 positions and a full night of observations conatians about 20 passes. Therefore, there are about 900 az / el postioins per night. A collage catalog has about 20 pages, and a positions catalog has about 900 pages.
+
+
+
+
+
+dataproducts\
+  dp20091214\
+    <catalogs> (2)
+    <video> (1 + 45)
+    data.txt
+    images\
+      regular\
+      nostars\
+      collage\
+  dp20091215\
+    <catalogs> (2)
+    <video> (1 + 45)
+    data.txt
+    images\
+      regular\
+      nostars\
+      collage\
+  dp20091216\
+    <catalogs> (2)
+    <video> (1 + 45)
+    data.txt
+    images\
+      regular\
+      nostars\
+      collage\
+
+cp /media/LAVAE/data20091214/dataproducts/catalogs/collage/catalog-collage-20091214.pdf /media/BlackArmor\ Drive/dataproducts/dp20091214/.
+cp /media/LAVAE/data20091214/dataproducts/catalogs/positions/positions-20091214.pdf /media/BlackArmor\ Drive/dataproducts/dp20091214/catalog-positions-20091214.pdf
+cp /media/LAVAE/data20091214/dataproducts/video/* /media/BlackArmor\ Drive/dataproducts/dp20091214
+cp /media/LAVAE/data20091214/dataproducts/data/* /media/BlackArmor\ Drive/dataproducts/dp20091214
+cp -r /media/LAVAE/data20091214/dataproducts/images /media/BlackArmor\ Drive/dataproducts/dp20091214/.
+
+
+
+
+TODO next
+
+check script ran
+
+gen pdfs and videos
+
+copy for ship
+
+
+
+
+
+TODO next
+
+create video
+
+textron systems header/footer on pdfs
+
+catalog positions
+catalog collages
+
+write text file
+
+
+
+
+xxf = open('/media/LAVAE/data20100118/dataproducts/caches/catalog.pk', 'r')
+cat20100118 = cPickle.load(xxf)
+xxf.flush()
+xxf.close()
+for p in cat20100118: p['nostarspath'] = '/media/LAVAE/data20100118/dataproducts/images/nostars/' + op.basename(p['nostarspath'])
+for p in cat20100118: p['regularpath'] = '/media/LAVAE/data20100118/dataproducts/images/regular/' + op.basename(p['regularpath'])
+for p in cat20100118: p['nspicklepath'] = '/media/LAVAE/data20100118/dataproducts/caches/nostarspk/' + op.basename(p['nspicklepath'])
+cat20100118 = sg.correctimagefilenames(cat20100118)
+xxf = open('/media/LAVAE/data20100118/dataproducts/caches/catalog.pk', 'w')
+cPickle.dump(cat20100118, xxf)
+xxf.flush()
+xxf.close()
+
+
+xxf = open('/media/LAVAE/data20100119/dataproducts/caches/catalog.pk', 'r')
+cat20100119 = cPickle.load(xxf)
+xxf.flush()
+xxf.close()
+for p in cat20100119: p['nostarspath'] = '/media/LAVAE/data20100119/dataproducts/images/nostars/' + op.basename(p['nostarspath'])
+for p in cat20100119: p['regularpath'] = '/media/LAVAE/data20100119/dataproducts/images/regular/' + op.basename(p['regularpath'])
+for p in cat20100119: p['nspicklepath'] = '/media/LAVAE/data20100119/dataproducts/caches/nostarspk/' + op.basename(p['nspicklepath'])
+cat20100119 = sg.correctimagefilenames(cat20100119)
+xxf = open('/media/LAVAE/data20100119/dataproducts/caches/catalog.pk', 'w')
+
+
+xxf = open('/media/LAVAF/data20100120/dataproducts/caches/catalog.pk', 'r')
+cat20100120 = cPickle.load(xxf)
+xxf.flush()
+xxf.close()
+for p in cat20100120: p['nostarspath'] = '/media/LAVAF/data20100120/dataproducts/images/nostars/' + op.basename(p['nostarspath'])
+for p in cat20100120: p['regularpath'] = '/media/LAVAF/data20100120/dataproducts/images/regular/' + op.basename(p['regularpath'])
+for p in cat20100120: p['nspicklepath'] = '/media/LAVAF/data20100120/dataproducts/caches/nostarspk/' + op.basename(p['nspicklepath'])
+cat20100120 = sg.correctimagefilenames(cat20100120)
+
+
+xxf = open('/media/LAVAF/data20100121/dataproducts/caches/catalog.pk', 'r')
+cat20100121 = cPickle.load(xxf)
+xxf.flush()
+xxf.close()
+for p in cat20100121: p['nostarspath'] = '/media/LAVAF/data20100121/dataproducts/images/nostars/' + op.basename(p['nostarspath'])
+for p in cat20100121: p['regularpath'] = '/media/LAVAF/data20100121/dataproducts/images/regular/' + op.basename(p['regularpath'])
+for p in cat20100121: p['nspicklepath'] = '/media/LAVAF/data20100121/dataproducts/caches/nostarspk/' + op.basename(p['nspicklepath'])
+cat20100121 = sg.correctimagefilenames(cat20100121)
+
+
+
+
+
+for p in cat20091214: p['nspicklepath'] = '/media/LAVAE/data20091214/dataproducts/caches/nostarspk' + op.basename(p['nspicklepath'])
+
+mencoder "mf://../caches/vidimages/watermarked/*.png" -mf fps=10 -o regular-20091214-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+mencoder "mf://../caches/vidimages/watermarked/*.png" -mf fps=10 -o regular-20091216-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+mencoder "mf://../caches/vidimages/watermarked/*.png" -mf fps=10 -o regular-20100118-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+mencoder "mf://../caches/vidimages/watermarked/*.png" -mf fps=10 -o regular-20100119-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+mencoder "mf://../caches/vidimages/*.png" -mf fps=10 -o regular-20100211-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+mencoder "mf://../caches/vidimages/*.png" -mf fps=10 -o regular-20100217-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+mencoder "mf://../caches/vidimages/*.png" -mf fps=10 -o regular-20100218-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+
+/usr/bin/mencoder "mf:/media/LAVAE/data20091214/dataproducts/caches/vidimages/watermarked/regular-*-*-*-0000-0900.png" -mf fps=10 -o /media/LAVAE/data20091214/dataproducts/video/regular-20091214-0000-0900-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+mencoder "mf://*.png" -mf fps=10 -o regular-20091215-200kbs.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=200
+
+
+mencoder "mf://*.png" -mf fps=10 -o test-msmpeg4v2.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=800
+mencoder "mf://*.png" -mf fps=10 -o test-.avi -ovc lavc -lavcopts vcodec=msmpeg4v2:vbitrate=800
+
+
+= LAVAE =
+data20091214/caches/vidimages/watermarked
+  28523
+data20091215/caches/vidimages/watermarked
+  28484
+data20091216/caches/vidimages/watermarked
+  15152
+data20100118/caches/vidimages/watermarked
+  28432
+data20100119/caches/vidimages/watermarked
+    219
+
+= LAVAF =
+data20100120/caches/vidimages/watermarked
+  28084
+data20100121/caches/vidimages/watermarked
+  24313
+
+
+time to watermark
+((15152. + 28432 + 219 + 28084 + 24313) / (127 / 8.7)) / 60
+((28432) / (127 / 8.7)) / 60
+
+
+
+
+= LAVAE =
+data20091214
+  091214
+  091215
+data20091215
+  091215
+  091216
+data20091216
+  091216
+  091217
+data20100118
+  100118
+  100119
+data20100119
+  100119
+
+= LAVAF =
+data20100120
+  100120
+  100121
+data20100121
+  100121
+  100122
+
+= LAVAH =
+100211
+100212
+100217
+100218
+100219
+
+
+
+== installing pymedia ==
+used for creating compressed video files
+
+= pymedia =
+
+= lame =
+$ ./configure --prefix=/home/jra --with-vorbis --with-vorbis=/usr/lib64
+
+= faad2 =
+
+catxxx = sg.catalog_new(filenames0118[:2])
+
+TODO
+
+Pass 00
+  collect data for catalog and write pickle and text file in night directory
+    for each pass
+      min, max, mean, stdev for regular images
+      min, max, mean, stdev for nostars images
+  cache nostars data (cPickle)
+Pass 01
+  read cached nostars data, adjust using catalog information
+  read regular images, adjust using catalog information
+  write nostar and regular images as pngs in parallel directory
+Pass 03
+  construct collages for each lookset
+  construct web pages for each night
+Pass 04
+  save images for video construction
+  write data for graph construction
+Pass 05
+  construct videos from image collections
+  construct graphs from data
+
+'year': 2010,
+'month': 1,
+'day': 18,
+'hours': 20,
+'minutes': 54,
+'seconds': 39,
+'az': 0.0,
+'el': 75.0,
+'filename': ['/media/New Volume/Data_20100118/100118/100118_014.img'],
+'bg': 11682,
+'ed': 13010,
+'ix': 12346,
+'recorded_az': 0.0,
+'recorded_el': 75.0,
+
+'pass': 2,
+
+'min': 26.355,
+'max': 269.535,
+'mean': 41.859345703125001,
+'stdev': 2.191746622036483,
+
+'nspicklepath': '/tmp/jrasr_tDFoBq.pk',
+
+'nsmin': 39.689999,
+'nsmax': 43.994999,
+'nsmean': 41.717376302083331,
+'nsstdev': 0.65752387522003719,
+
+'passmin': 41.710091145833339,
+'passmax': 2.0909348951654412,
+'passmean': 41.710091145833339,
+'passstdev': 2.0909348951654412,
+
+'nspassmin': 41.710091145833339,
+'nspassmax': 2.0909348951654412,
+'nspassmean': 41.710091145833339,
+'nspassstdev': 2.0909348951654412,
+
+'histst_imagepath': '/home/jra/tmp100118/sg-histst-20100118-205439-002-000.0-075.0.png',
+'starrm_imagepath': '/home/jra/tmp100118/sg-starrm-20100118-205439-002-000.0-075.0.png',
+
+'mnclp': 35.437286460337013,
+'mxclp': 47.982895831329664,
+
+'srmnclp': 35.437286460337013,
+'srmxclp': 47.982895831329664,
+
+
+import tempfile
+import os
+
+xx, yy = tempfile.mkstemp(suffix='xxx.pk', prefix='jrayyy_')
+zz = os.fdopen(xx, 'w')
+zz.write('happy happy')
+zz.close()
+
+
+import skyglow as sg
+
+fls091214 = glob.glob('/media/New Volume/Data_14Dec/*/*.img')
+fls091215 = glob.glob('/media/New Volume/Data_15Dec/*/*.img')
+fls091216 = glob.glob('/media/New Volume/Data_16Dec/*/*.img')
+fls100118 = glob.glob('/media/New Volume/Data_20100118/*/*.img')
+fls100119 = glob.glob('/media/New Volume/Data_20100119/*/*.img')
+
+cat091214 = sg.catalog(fls091214[:1])
+cat091215 = sg.catalog(fls091215[:1])
+cat091216 = sg.catalog(fls091216[:1])
+cat100118 = sg.catalog(fls100118[:1])
+cat100119 = sg.catalog(fls100119[:1])
+
+scat091214 = sg.splitcat(cat091214[0])
+scat091215 = sg.splitcat(cat091215[0])
+scat091216 = sg.splitcat(cat091216[0])
+scat100118 = sg.splitcat(cat100118[0])
+scat100119 = sg.splitcat(cat100119[0])
+
+sg.writestatsimages(scat091214, '/home/jra/tmp')
+sg.writestatsimages(scat091215, '/home/jra/tmp')
+sg.writestatsimages(scat091216, '/home/jra/tmp')
+sg.writestatsimages(scat100118, '/home/jra/tmp')
+sg.writestatsimages(scat100119, '/home/jra/tmp')
+
+cat100118_12 = sg.catalog(fls100118[:12])
+scat100118_12 = sg.splitcat(cat100118_12[0])
+lkcat100118_12 = sg.writestatsimages(scat100118_12, '/home/jra/tmp')
+
+DO IT ALL
+import glob
+import skyglos as sg
+import cPickle
+fls100118 = glob.glob('/media/New Volume/Data_20100118/*/*.img')
+cat100118 = sg.catalog(fls100118)
+scat100118 = sg.splitcat(cat100118[0])
+lkcat100118 = sg.writestatsimages(scat100118, '/home/jra/tmp100118')
+tmpfile = open('/home/jra/tmp100118/catalog.pk', 'wb')
+cPickle.dump(lkcat100118, tmpfile)
+tmpfile.close()
+
+
+
+looks like 20100118 was a good night for data
+
+
+rdesktop -g 1024x800 -u jaddison@systems.textron.com -d systems.textron.com txsapsbos004.systems.textron.com
+
+TODO
+
+PDF of night's data
+Video of whole night
+  date time az / el
+Graphs
+
+Steps in processing directory of data
+  get list of files
+  split days
+  split sets
+  create subdirs for each day
+  create toc file (csv)
+    (beg/end indecies, az/el, time)
+  create stats file (csv)
+    filename date ... avg stdev ...
+  create graphs
+    total / avg / std irad
+  create sub dir for plain images
+  create sub dir for no-star images
+  create sub dir for agc images
+  create web page with images
+  create pdf with images
+  create video entire night
+    every 20th frame, 30 fps
+    date time az / el total-power avg-power stdev-power  
+  create video for each look
+
+
+GUI
+wizard
+  get directory containing data files
+  get directory where to save products
+  select which products to generate
+  dialog progress bar / info
+
+
+
+
+
+
+
+
+
+import numpy as np
+import skyglow as sg
+import uavdata as ud
+sg00 = ud.UAVData('/media/FreeAgent Drive/skyglowdec03/091203_004.img')
+azel = sg.findazelranges(sg00)
+azel
+
+
+
+['/media/FreeAgent Drive/skyglowdec03/091203_004.img','/media/FreeAgent Drive/skyglowdec03/091203_018.img','/media/FreeAgent Drive/skyglowdec03/091203_019.img']
+
+
+
+
+In [29]: from PIL import Image
+
+
+
+In [32]: im = Image.open('prj/pfiles/091203_004-000812-292.5-045.0.png')
+
+In [33]: im.rotate(45).show()
+
+In [34]: im.rotate(-45).show()
+
+In [40]: im.format
+Out[40]: 'PNG'
+
+In [41]: im.mode
+Out[41]: 'L'
+
+In [42]: im.size
+Out[42]: (320, 240)
+
+In [43]: im.info
+Out[43]: {}
+
+In [49]: import math
+
+In [50]: math.sin(45)
+Out[50]: 0.85090352453411844
+
+In [174]: im.transform((640,480), Image.AFFINE, af.extract(np.dot(af.trn2d(160, 120), np.dot(af.rot2d(45), af.trn2d(-160, -120))))).show()
+
+
+
+
+
+
+
+In [219]: reload(af)
+Out[219]: <module 'affines' from 'affines.py'>
+
+In [220]: im0 = af.appazel(0, 0, im)
+
+In [221]: im0.show()
+
+
+
+
+
+
+
+
+
+################################################################################
+################################################################################
+
+/media/FreeAgent Drive/skyglowdec03/091203_004.img
+
+     0   1623           292.5       45.0
+  1814   3568           315.0       45.0
+  3728   5521           337.5       45.0
+  5649   7455             0.0       45.0
+  7614   9395            22.5       45.0
+  9555  11338            45.0       45.0
+ 11466  13010            67.5       45.0
+
+
+################################################################################
+################################################################################
+
+/media/FreeAgent Drive/skyglowdec03/091203_018.img
+
+     0   1158           270.0       60.0
+  1539   3453            90.0       60.0
+  3612   5308           135.0       60.0
+  5532   7277           180.0       60.0
+  7563   9433           225.0       60.0
+  9656  11426           270.0       60.0
+ 11747  13010           270.0       45.0
+
+
+################################################################################
+################################################################################
+
+/media/FreeAgent Drive/skyglowdec03/091203_019.img
+
+     0    318           270.0       45.0
+   478   2258           247.5       45.0
+  2417   4229           225.0       45.0
+  4357   6193           202.5       45.0
+  6320   8097           180.0       45.0
+  8257  10036           157.5       45.0
+ 10196  12042           135.0       45.0
+ 12107  13010           112.5       45.0
+
