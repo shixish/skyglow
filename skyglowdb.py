@@ -155,7 +155,7 @@ class DB:
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
 					values = [idx, lt, ms, az, el, img, x, tmean, tstd]
-					self.c.execute("insert or ignore into `frames` (idx,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+					self.c.execute("insert or ignore into `frames` (idx,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
 						el = 361
