@@ -154,7 +154,7 @@ class DB:
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
-					values = [idx, lt, ms, az, el, img, x, tmean, tstd]
+					values = [idx, lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd]
 					self.c.execute("insert or ignore into `frames` (idx,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
