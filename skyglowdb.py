@@ -1,4 +1,18 @@
-import datetime, time, sys
+######################################
+#Code written by: Andrew Wessels 2010#
+#------------------------------------#
+#This code is used to produce
+# and manipulate a sqlite database
+# for working with skyglow
+
+#Useful for getting set up in terminal:
+'''
+import skyglowdb
+reload(skyglowdb); db = skyglowdb.DB("/home/drew/prj/data/")
+'''
+
+import time, sys
+from datetime import datetime as dt
 import os
 import os.path as op
 import uavdata as ud
@@ -6,6 +20,8 @@ import sqlite3
 
 import numpy as np
 import matplotlib.pyplot as plt
+
+import shutil
 
 #used for vids
 import glob
@@ -17,7 +33,9 @@ from PIL import Image, ImageFont, ImageDraw, ImageOps, ImageEnhance
 import fnmatch, os
 
 class DB:
-	def __init__(self, rootdir):
+	def __init__(self, rootdir=None):
+		if rootdir == None:
+			rootdir = os.path.abspath(os.curdir)
 		self.rootdir = rootdir
 		self.conn = sqlite3.connect(op.join(self.rootdir, 'sql'))
 		self.c = self.conn.cursor()
@@ -29,12 +47,31 @@ class DB:
 		self.c.close()
 		self.conn.close()
 
-	def locate(self, pattern, root=os.curdir):
-		 '''Locate all files matching supplied filename pattern in and below
-		 supplied root directory.'''
-		 for path, dirs, files in os.walk(os.path.abspath(root)):
-		     for filename in fnmatch.filter(files, pattern):
-		         yield os.path.join(path, filename)
+	def locate(self, pattern, root=None):
+		if not root:
+			root = self.rootdir
+		'''Locate all files matching supplied filename pattern in and below supplied root directory.'''
+		for path, dirs, files in os.walk(os.path.abspath(root)):
+			for filename in fnmatch.filter(files, pattern):
+				yield os.path.join(path, filename)
+
+	def backup(self):
+		print "Are you sure you want to overwrite any previous backup?"
+		answer = raw_input()
+		if len(answer) > 0 and answer[0].lower() == "y" or answer == "1":
+			shutil.copy(op.join(self.rootdir, 'sql'), op.join(self.rootdir, 'sql.bak'))
+			print "Done."
+		else:
+			print "Unchanged."
+
+	def restore(self):
+		print "Are you sure you want to overwrite the current database with the backup?"
+		answer = raw_input()
+		if len(answer) > 0 and answer[0].lower() == "y" or answer == "1":
+			shutil.copy(op.join(self.rootdir, 'sql.bak'), op.join(self.rootdir, 'sql'))
+			print "Done."
+		else:
+			print "Unchanged."
 
 	def sqlDict(self, c = None):
 		if c == None:
@@ -84,7 +121,7 @@ class DB:
 
 		if rebuild:
 			self.c.execute("drop table frames")
-		self.c.execute("create table `frames` (idx INT PRIMARY_KEY, date SMALLINT, lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
+		self.c.execute("create table `frames` (idx INT PRIMARY_KEY, lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
 		last = dict()
 		startid = 0
 		lastid = 0
@@ -96,7 +133,6 @@ class DB:
 		#d['time'] = time.localtime(md['LTime'])
 		first = True
 		for img in imgfiles:
-			date = op.basename(op.dirname(img)) #this assumes that the files are set up properly...
 			uadata = ud.UAVData(img)
 			print "Data Entries: ", len(uadata)
 			#positions = dict()
@@ -118,8 +154,8 @@ class DB:
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
-					values = [idx, date, lt, ms, az, el, img, x, tmean, tstd]
-					self.c.execute("insert or ignore into `frames` (idx,date,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+					values = [idx, lt, ms, az, el, img, x, tmean, tstd]
+					self.c.execute("insert or ignore into `frames` (idx,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
 						el = 361
@@ -181,7 +217,18 @@ class DB:
 		ax.plot(counts)
 		plt.show()
 		# Save (commit) the changes
-		self.conn.commit()	#This function is intended to be used to merge positions
+		self.conn.commit()
+
+	def getDays(self):
+		days = self.query("SELECT distinct strftime('%Y-%m-%d', lt, 'unixepoch', 'localtime') as day from frames")
+		#self.query("SELECT strftime('%H:%M:%S', lt, 'unixepoch', 'localtime') as day, idx from frames order by idx asc limit 1")
+			#this will return the first entry
+
+		#self.query("SELECT strftime('%H:%M:%S', lt, 'unixepoch', 'localtime') as day, idx from frames order by idx desc limit 1")
+			#this will return the last entry
+
+	
+	#This function is intended to be used to merge positions
 	#TODO:: Fix this
 	#c = database connection
 	#dat = list of dictionary data from db
@@ -324,8 +371,11 @@ class DB:
 	
 		# Save (commit) the changes
 		self.conn.commit()
-	#if options.graph:
-	def query(self, query, var = []):		#this gathers data for the graph
+
+	def getFrames(self, frm, to):
+		self.query("select idx, file, ix from `frames` where idx>=? and idx<=? order by idx", (frm, to))
+
+	def query(self, query, var = []):
 		if len(var) > 0:	
 			self.c.execute(query, var)
 		else:
@@ -495,6 +545,10 @@ class DB:
 		use = (use / dvsor) * 255
 
 		im = Image.fromarray(np.array(use, dtype='uint8'))
+		#not sure if i should use gmtime() or localtime()
+		#looks like it needs to be localtime()
+		#time.mktime() can be used to make these timestamps...
+		# print time.mktime(time.localtime(ts)), ts
 		flname = prefix+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(fm['LTime']))+'-'+str(entry['MSTime'])+'.png'
 		#flname = prefix+'-'+str(fm['LTime'])+'-'+str(fm['MSTime'])+'.png'
 		im.save(op.join(usedir, flname))
