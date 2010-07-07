@@ -27,6 +27,7 @@ import sqlite3
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 import shutil
 
@@ -293,10 +294,9 @@ class DB:
 	'''
 	
 	#This function is intended to be used to merge positions
-	#TODO:: Fix this
-	#c = database connection
-	#dat = list of dictionary data from db
+	#data = list of dictionary data from db
 	#i = index of thing to merge
+	#perm = to make the changes permanent (change the database)
 	#direction = 
 	#	{
 	#		 0 : merge both sides
@@ -327,7 +327,12 @@ class DB:
 			del data[use]
 		return data
 
-	#if options.clean:
+	
+	#fixPositions will go through the "positions" table and attempt to clean up erros
+	# by finding any small fragments and attempting to fill the gaps with its best guess as to
+	# what it should be.
+	#perm = whether the changes should effect the database, or just run a simulation
+	#graph = show a graph of the original data overlayed by the corrected data
 	def fixPositions(self, perm = True, graph = False):
 		print "Cleaning up the data"
 		self.c.execute("select rowid,* from `positions` ")
@@ -397,6 +402,8 @@ class DB:
 		self.conn.commit()
 		return self #allows for chaining
 
+	#not currently in use... 
+	#TODO:: make more helper functions like this
 	def getFrames(self, frm, to):
 		self.query("select idx, file, ix from `frames` where idx>=? and idx<=? order by idx", (frm, to))
 
@@ -410,34 +417,33 @@ class DB:
 		self.conn.commit()
 		return ret
 
-	#if options.graph:
+	#this will create a bar graph representing the positions data.
+	#this may be useful when looking for errors.
 	def graphPositions(self):
-		#this gathers data for the graph
-		data = self.query("select rowid,* from `positions` where az != 361 and el != 361")
-		show = list()
-		for x in data:
-			for z in range(x['count']):
-				show.append(x['az']+x['el'])
-			show.append(0)
-
-		#draw the graph
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
-		ax.plot(show, linewidth=1)
+		#this gathers data for the graph
+		data = self.query("select rowid,* from `positions` where az != 361 and el != 361")
+		x = 0
+		for e in data:
+			y = e['az']+e['el']
+			ax.bar(x, y, e['count'])
+			x += e['count']
+		#draw the graph
 		plt.show()
 		return self #allows for chaining
 
-	#Data cleanup algorithms
-	def imgRegular(self, dtfl, options):
-		return np.clip(dtfl,options['mean']-options['std']*options['thresh'],options['mean']+options['std']*options['thresh'])
+	#Various data cleanup algorithms used by writeimage()
+	def imgRegular(self, dtfl, opt):
+		return np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
 
-	def imgNostar(self, dtfl, options):
+	def imgNostar(self, dtfl, opt):
 		return medianfilt2(dtfl, 9)
 	
-	def imgSpikeless(self, dtfl, options):
+	#this one gets rid of the spikes...
+	#this one left a few artifacts from the removal, so i dont think its an ideal solution...
+	def imgSpikeless(self, dtfl, opt):
 		'''
-		#this one gets rid of the spikes...
-		#leaves artifacts. no good really...
 		spikeless = dtfl
 		factor = 3
 		for c,y in enumerate(spikeless):
@@ -448,7 +454,8 @@ class DB:
 					#print i, e
 		'''
 
-	def imgHisto(self, dtfl, options):
+	#this is my attempt at using the histogram data to clear up inconsistencies...
+	def imgHisto(self, dtfl, opt):
 		'''
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
@@ -485,10 +492,10 @@ class DB:
 	#  - if this is a list of many entries (dictionaries), it will do each entry recursively.
 	# imgtype defines which filter to use
 	#  - can be either "regular" or "nostar" (possibly more to come)
-	# options = dict('mean':None, 'std':None, 'thresh':5, 'dir':None)
+	# opt = dict('mean':None, 'std':None, 'thresh':5, 'dir':None)
 	#  - mean, std, thresh are used for scaling, these will be determined on a frame by frame basis if left blank.
 	#  - dir is the directory where the images should go. Default is '...rootdir/images'
-	def writeimage(self, entry, imgtype, resultsdir = None, options = {}):
+	def writeimage(self, entry, imgtype = "regular", resultsdir = None, opt = {}):
 		#dostarremoval = Truev =
 		#image types:
 		#regular
@@ -501,18 +508,18 @@ class DB:
 		if type(entry) == list:#if given the whole list, just do all of them recursively
 			if len(entry):
 				if len(entry) > 1:
-					self.writeimage(entry[1:], imgtype, options)
+					self.writeimage(entry[1:], imgtype, opt)
 				entry = entry[0]
 			else:
 				raise RuntimeError('writeimage: Entry variable is invalid.')
 
-		if not 'thresh' in options:
-			options['thresh'] = 5
+		if not 'thresh' in opt:
+			opt['thresh'] = 5
 
-		if not 'dir' in options:
+		if not 'dir' in opt:
 			imagesdir = op.join(self.rootdir, 'images')
 		else:
-			imagesdir = options['dir']
+			imagesdir = opt['dir']
 		if not op.isdir(imagesdir):
 		  os.makedirs(imagesdir)
 		usedir = op.join(imagesdir, imgtype)
@@ -529,12 +536,12 @@ class DB:
 		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
 
 
-		if not 'mean' in options or not 'std' in options: #if some scale factor isnt supplied, use whatever works for this image
-			options['mean'] = dtfl.mean()
-			options['std'] =  dtfl.std()
+		if not 'mean' in opt or not 'std' in opt: #if some scale factor isnt supplied, use whatever works for this image
+			opt['mean'] = dtfl.mean()
+			opt['std'] =  dtfl.std()
 		else:
-			options['mean'] *= irradpcount
-			options['std'] *= irradpcount
+			opt['mean'] *= irradpcount
+			opt['std'] *= irradpcount
 
 		'''
 		print "--", entry['idx'], "--"
@@ -544,19 +551,19 @@ class DB:
 		print 'rgstdev:', regular.std()
 		'''
 
-		use = valid[imgtype](dtfl, options) #apply the appropriate filter
+		use = valid[imgtype](dtfl, opt) #apply the appropriate filter
 
-		if 'graph' in options:
+		if 'graph' in opt:
 			fig = plt.figure()
 			ax = fig.add_subplot(111)
 			
-	
 			ax.plot(use)
 			ax.plot([use.mean()+use.std()]*len(use), linewidth=2, color="b")
 			ax.plot([use.mean()-use.std()]*len(use), linewidth=2, color="b")
 		
-			ax.plot([use.mean()+use.std()*options['thresh']]*len(use), linewidth=2, color="r")
-			ax.plot([use.mean()-use.std()*options['thresh']]*len(use), linewidth=2, color="r")		
+			ax.plot([use.mean()+use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
+			ax.plot([use.mean()-use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
+				
 	
 			'''
 			ax.plot(histodata)
@@ -574,8 +581,8 @@ class DB:
 		#stretch values across 0-255
 		#tmin = use.min()
 		#tmax = use.max()
-		tmin = options['mean']-options['std']*options['thresh']
-		tmax = options['mean']+options['std']*options['thresh']
+		tmin = opt['mean']-opt['std']*opt['thresh']
+		tmax = opt['mean']+opt['std']*opt['thresh']
 		use = use - tmin
 		dvsor = (tmax - tmin)
 		use = (use / dvsor) * 255
@@ -626,6 +633,10 @@ class DB:
 
 ##END OF DB CLASS##
 
+#i'm leaving these out of the class because they don't really need to make use of any member variables,
+#so i figured they don't need to exsist in every instance of the DB class...
+
+#used for creating the "nostar" images in the writeimage() function
 def pad(orgarr, newshp, padval=0, center=False):
 
   # returns a list of all indecies in an array with shape, shp, as lists
@@ -696,6 +707,7 @@ def pad(orgarr, newshp, padval=0, center=False):
 
   return newarr
 
+#used for creating the "nostar" images in the writeimage() function
 def medianfilt2(imgin, ksize):
 	 M, N = imgin.shape
 	 ksz = int(ksize)

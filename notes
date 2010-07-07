@@ -11,3 +11,6 @@ print db.query("select * from frames where lt>? and lt<?",(time.mktime([2010, 3,
 #this is able to grab specific values out
 print db.query("SELECT strftime('%Y', lt, 'unixepoch', 'localtime') as year, lt  from frames")
 
+
+q = db.query("select * from frames limit 145, 1")
+
