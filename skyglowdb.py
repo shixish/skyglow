@@ -9,10 +9,13 @@
 '''
 import skyglowdb
 reload(skyglowdb); db = skyglowdb.DB("/home/drew/prj/data/")
+reload(skyglowdb); bdb = skyglowdb.DB("/media/lavag")
 '''
 
 import time, sys
 from datetime import datetime as dt
+#i made this one to help with manipulating the time info
+import dbtime
 import os
 import os.path as op
 import uavdata as ud
@@ -109,7 +112,7 @@ class DB:
 	#  it populates the frames table, #
 	#  and the positions table.       #
 	###################################
-	def buildDB(self, rebuild = False):
+	def build(self, rebuild = False):
 		imgfiles = []
 		imgfiles[:] = self.locate('*.img', self.rootdir)
 		imgfiles.sort()
@@ -121,15 +124,13 @@ class DB:
 
 		if rebuild:
 			self.c.execute("drop table frames")
-		self.c.execute("create table `frames` (idx INT PRIMARY_KEY, lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
-		last = dict()
-		startid = 0
-		lastid = 0
-		lastaz= 0
+		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
 		lastel = 0
+		lastaz = 0
 		lastlt = 0
+		startlt = 0
+		first = True
 		count = 0
-		idx = 0
 		#d['time'] = time.localtime(md['LTime'])
 		first = True
 		for img in imgfiles:
@@ -144,8 +145,8 @@ class DB:
 				lt = d['LTime']
 				ms = d['MSTime']
 				if first: #initialize values
-					lastaz = az
 					lastel = el
+					lastaz = az
 					lastlt = lt
 					first = False
 
@@ -154,50 +155,45 @@ class DB:
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
-					values = [idx, lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd]
-					self.c.execute("insert or ignore into `frames` (idx,lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?,?)", values)
+					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd]
+					#print values
+					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
 						el = 361
-			
+				
 				#this doesnt work because there are errors in the data, so i'll fix the data later
-				if (az != lastaz or el != lastel): #new position
-					#print "new position detected"
-					#self.c.execute("select * from `positions` where `start`='?' and `end`='?'", posStart, lastlt)
-					values = [lastaz, lastel, startid, lastid, count]
+				if (az != lastaz or el != lastel): #new position detection
+					values = [lastaz, lastel, startlt, lastlt, count]
 					#print values
-					#if count < 120:
-						#print "Suspicious!"
 					self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
-					firstpos = dict(d)
-					startid = idx
+					startlt = lt
 					count = 0
-				else:
-					count += 1
-
-				lastaz = az
+			
 				lastel = el
+				lastaz = az
 				lastlt = lt
-				lastid = idx
-				idx += 1
+				count += 1
+				lastlt = lt
 			now = time.time()
 			bench = (now - then)
 			print bench, " seconds"
+			sys.stdout.flush()
 		# Save (commit) the changes
 		self.conn.commit()
+		return self #allows for chaining
 
 	#################
 	#end of build db#
 	#################
 
-	def buildPassData(self, rebuild = False):
+	def doPasses(self, rebuild = False):
 		if rebuild:	
 			self.c.execute("drop table passes")
-		self.c.execute("create table `passes` (start DOUBLE UNIQUE, end DOUBLE UNIQUE)")
+		self.c.execute("create table `passes` (start INT UNIQUE, end INT UNIQUE)")
 
 		#start running some stats
-		self.c.execute("select rowid,* from `positions` where az != 361 and el != 361")
-		data = self.sqlDict()
+		data = self.query("select rowid,* from `positions` where az != 361 and el != 361")
 		firstdata = data[0]
 		counts = []
 		lastdata = data[0]
@@ -218,15 +214,77 @@ class DB:
 		plt.show()
 		# Save (commit) the changes
 		self.conn.commit()
+		return self #allows for chaining
 
-	def getDays(self):
-		days = self.query("SELECT distinct strftime('%Y-%m-%d', lt, 'unixepoch', 'localtime') as day from frames")
-		#self.query("SELECT strftime('%H:%M:%S', lt, 'unixepoch', 'localtime') as day, idx from frames order by idx asc limit 1")
-			#this will return the first entry
-
-		#self.query("SELECT strftime('%H:%M:%S', lt, 'unixepoch', 'localtime') as day, idx from frames order by idx desc limit 1")
-			#this will return the last entry
-
+	def doNights(self, rebuild = False):
+		if rebuild:	
+			self.c.execute("drop table nights")
+		self.c.execute("create table `nights` (start INT UNIQUE, end INT UNIQUE)")
+		days = self.query("SELECT lt from frames where lt%30=0 group by strftime('%Y-%m-%d', lt, 'unixepoch', 'localtime')")
+		#throwing this in just incase there is something before noon on the first detected day...		
+		justincase = dbtime.dbtime(days[0]['lt'])
+		justincase["day"]-=1
+		days.insert(0,{"lt":int(justincase)})
+		for x in days:
+			local = dbtime.dbtime(x['lt'])
+			start = int(local.set({"hour":12, "min":0, "sec":0}))
+			local["day"]+=1
+			end = int(local)
+			format = '%Y-%m-%d %H:%M:%S'
+			#print start, end
+			#frames = self.query("select count(*) from frames where lt >= ? and lt <= ?", (start, end))
+			#print "Found", frames, "elements"
+			firstdata = self.query("SELECT lt from frames where ? < lt and lt <= ? order by lt asc limit 1", (start, end))
+			lastdata = self.query("SELECT lt from frames where ? < lt and lt <= ? order by lt desc limit 1", (start, end))
+			print "Between", dbtime.dbtime(start).strftime(format)[0], "and", dbtime.dbtime(end).strftime(format)[0]
+			#print "from", firstdata, "to", lastdata
+			if len(firstdata):
+				print "   First:", dbtime.dbtime(firstdata[0]['lt']).strftime(format)[0], "Last:", dbtime.dbtime(lastdata[0]['lt']).strftime(format)[0]
+				vals = (firstdata[0]['lt'], lastdata[0]['lt'])
+				self.query("insert into `nights` (start, end) values (?,?)", vals)
+			else:
+				print "   Nothing"
+		return self #allows for chaining
+			
+	'''
+	This wont really work... Needs greater detail than what 1 second frames can give...
+	def doPositions(self, rebuild = False):
+		if rebuild:
+			self.c.execute("drop table positions")
+		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
+		frames = self.query("SELECT * from frames order by lt")
+		lastel = 0
+		lastaz = 0
+		lastlt = 0
+		startlt = 0
+		first = True
+		count = 0
+		for x in frames:
+			az = x['az']
+			el = x['el']
+			lt = x['lt']
+			if first:
+				lastel = el
+				lastaz = az
+				lastlt = lt
+				first = False
+			if x['mean'] < 250: #static frames
+				az = 361
+				el = 361
+			#this doesnt work because there are errors in the data, so i'll fix the data later
+			if (az != lastaz or el != lastel): #new position detection
+				values = [lastaz, lastel, startlt, lastlt, count]
+				#print values
+				self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
+				startlt = lt
+				count = 0
+			
+			count += x['count']
+			
+			lastel = el
+			lastaz = az
+			lastlt = lt
+	'''
 	
 	#This function is intended to be used to merge positions
 	#TODO:: Fix this
@@ -294,7 +352,7 @@ class DB:
 				pe = data[prev]
 				#use = prev #default is to extend the previous entry
 				#rem = i
-				if e['count'] < 100: #tiny fragment
+				if e['count'] < 200 and e['az'] != 361 and e['el'] != 361: #small fragment that is not a slewing frame
 					# i want the first pass to just fill up the blanks in the slewing frames
 					if passnum < 2:
 						if pe['az'] == ne['az'] and pe['el'] == ne['el'] and pe['az'] == 361 and pe['el'] == 361:
@@ -371,6 +429,7 @@ class DB:
 	
 		# Save (commit) the changes
 		self.conn.commit()
+		return self #allows for chaining
 
 	def getFrames(self, frm, to):
 		self.query("select idx, file, ix from `frames` where idx>=? and idx<=? order by idx", (frm, to))
@@ -400,56 +459,16 @@ class DB:
 		ax = fig.add_subplot(111)
 		ax.plot(show, linewidth=1)
 		plt.show()
+		return self #allows for chaining
 
-	# this takes data (from sql) in sqlDict() form: [{'a':1, 'b':2}, {'a':3,'b':4}, ...]
-	# write images (normal, and nostar) to file
-	def writeimage(self, entry, resultsdir, mean = -1, std = -1, thresh = 5, az = -1, el = -1):
-		#dostarremoval = True
-		if az==-1 and el==-1:
-			if 'az' in entry and 'el' in entry:
-				az = entry['az']
-				el = entry['el']
-			else:
-				raise RuntimeError('error: No azel supplied for image.')
+	#Data cleanup algorithms
+	def imgRegular(self, dtfl, options):
+		return np.clip(dtfl,options['mean']-options['std']*options['thresh'],options['mean']+options['std']*options['thresh'])
 
-		imagesdir = op.join(resultsdir, 'images')
-		if not op.isdir(imagesdir):
-		  os.makedirs(imagesdir)
-
-		rgimagesdir = op.join(imagesdir, 'regular')
-		if not op.isdir(rgimagesdir):
-		  os.makedirs(rgimagesdir)
-		'''
-		usedir = op.join(rgimagesdir, str(el)+"-"+str(az))
-		if not op.isdir(usedir):
-		  os.makedirs(usedir)
-		'''
-		usedir = rgimagedir;
-		'''
-		nsimagesdir = op.join(imagesdir, 'nostars')
-		if not op.isdir(nsimagesdir):
-		  os.makedirs(nsimagesdir) 
-		sys.stdout.flush()
-		'''
-
-		#open the file
-		uadata = ud.UAVData(entry['file'])
-		fm = uadata.frame(entry['ix'])
-		#make it into a numpy array
-		dtfl = np.array(fm['Data'], dtype='float32')
-		irradpcount = 0.105 # nW / cm2 / um  per  count
-		#dtfl *= irradpcount
-		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
+	def imgNostar(self, dtfl, options):
+		return medianfilt2(dtfl, 9)
 	
-		#the data contains bad pixels, this is a mediocre way of removing them, and normalizing the data...
-		if mean == -1 or std == -1: #if some scale factor isnt supplied, use whatever works for this image
-			mean = dtfl.mean()
-			std =  dtfl.std()
-		#thresh = 5
-
-		#this gets rid of extranious values, and just keeps the good stuff
-		regular = np.clip(dtfl,mean-std*thresh,mean+std*thresh)
-
+	def imgSpikeless(self, dtfl, options):
 		'''
 		#this one gets rid of the spikes...
 		#leaves artifacts. no good really...
@@ -462,7 +481,16 @@ class DB:
 				
 					#print i, e
 		'''
-	
+
+	def imgHisto(self, dtfl, options):
+		'''
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+		(n, bins) = np.histogram(dtfl, bins=100)
+		#ax.plot(.5*(bins[1:]+bins[:-1]), n)
+		plt.show()
+		'''
+
 		#this also works...	
 		'''
 		(n, bins) = np.histogram(dtfl, bins=100)
@@ -482,10 +510,67 @@ class DB:
 	
 		histodata = np.clip(dtfl,bins[tmin],bins[tmax])
 		'''
-	
-		#more complicated, more data lost
-		#nostar = medianfilt2(dtfl, 9)
-	
+
+
+	# this takes data (from sql) in sqlDict() form: [{'a':1, 'b':2}, {'a':3,'b':4}, ...]
+	# entry is expected to contain "file", and "ix"
+	# write images (normal, and nostar) to file
+	# options = dict('mean':None, 'std':None, 'thresh':5, 'az':None, 'el':None, 'dir':None)
+	#  if these values are not set, it will use appropriate defaults...
+	def writeimage(self, entry, imgtype, resultsdir = None, options = {}):
+		#dostarremoval = Truev =
+		#image types:
+		#regular
+		#nostar
+		#collage
+		imgtype = imgtype.lower() #enforce lower case
+		valid = {"regular":self.imgRegular, "nostar":self.imgNostar}
+		if not imgtype in valid:
+			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
+		if type(entry) == list:#if given the whole list, just do all of them recursively
+			if len(entry):
+				if len(entry) > 1:
+					self.writeimage(entry[1:], imgtype, options)
+				entry = entry[0]
+			else:
+				raise RuntimeError('writeimage: Entry variable is invalid.')
+
+		if not 'az' in options and not 'el' in options:
+			if 'az' in entry and 'el' in entry:
+				options['az'] = entry['az']
+				options['el'] = entry['el']
+			else:
+				raise RuntimeError('writeimage: No azel supplied for image.')
+		if not 'thresh' in options:
+			options['thresh'] = 5
+
+		if not 'dir' in options:
+			imagesdir = op.join(self.rootdir, 'images')
+		else:
+			imagesdir = options['dir']
+		if not op.isdir(imagesdir):
+		  os.makedirs(imagesdir)
+		usedir = op.join(imagesdir, imgtype)
+		if not op.isdir(usedir):
+		  os.makedirs(usedir)
+
+		#open the file
+		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
+		fm = uadata.frame(entry['ix'])
+		#make it into a numpy array
+		dtfl = np.array(fm['Data'], dtype='float32')
+		irradpcount = 0.105 # nW / cm2 / um  per  count
+		dtfl *= irradpcount
+		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
+
+
+		if not 'mean' in options or not 'std' in options: #if some scale factor isnt supplied, use whatever works for this image
+			options['mean'] = dtfl.mean()
+			options['std'] =  dtfl.std()
+		else:
+			options['mean'] *= irradpcount
+			options['std'] *= irradpcount
+
 		'''
 		print "--", entry['idx'], "--"
 		print 'rgmin:', regular.min()
@@ -494,64 +579,46 @@ class DB:
 		print 'rgstdev:', regular.std()
 		'''
 
-		'''
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		(n, bins) = np.histogram(dtfl, bins=100)
-		#ax.plot(.5*(bins[1:]+bins[:-1]), n)
-		plt.show()
-		'''
-		'''
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		use = regular
-	
-		ax.plot(use)
-		ax.plot([use.mean()+use.std()]*len(use), linewidth=2)
-		ax.plot([use.mean()-use.std()]*len(use), linewidth=2)
-		'''
-	
-		'''
-		ax.plot(histodata)
-		ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
-		ax.plot([histodata.mean()-histodata.std()]*len(histodata), linewidth=2)
-		'''
+		use = valid[imgtype](dtfl, options) #apply the appropriate filter
 
-		'''
-		ax.plot(nostar)
-		ax.plot([nostar.mean()+nostar.std()]*len(nostar), linewidth=2)
-		ax.plot([nostar.mean()-nostar.std()]*len(nostar), linewidth=2)
-		'''	
-		#plt.show()
+		if 'graph' in options:
+			fig = plt.figure()
+			ax = fig.add_subplot(111)
+			
 	
-
-		# regular image scaled per pass
+			ax.plot(use)
+			ax.plot([use.mean()+use.std()]*len(use), linewidth=2, color="b")
+			ax.plot([use.mean()-use.std()]*len(use), linewidth=2, color="b")
 		
-		#mnclp = p['rgpassmean'] - 3.5 * p['rgpassstdev']
-		#mxclp = p['rgpassmean'] + 3.5 * p['rgpassstdev']
+			ax.plot([use.mean()+use.std()*options['thresh']]*len(use), linewidth=2, color="r")
+			ax.plot([use.mean()-use.std()*options['thresh']]*len(use), linewidth=2, color="r")		
+	
+			'''
+			ax.plot(histodata)
+			ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
+			ax.plot([histodata.mean()-histodata.std()]*len(histodata), linewidth=2)
+			'''
 
-		use = regular
-		prefix = "rg"
-		#if az!=-1 and el!=-1:
-		#	prefix += "-"+str(el)+"-"+str(az)
+			'''
+			ax.plot(nostar)
+			ax.plot([nostar.mean()+nostar.std()]*len(nostar), linewidth=2)
+			ax.plot([nostar.mean()-nostar.std()]*len(nostar), linewidth=2)
+			'''	
+			plt.show()
 
 		#stretch values across 0-255
 		#tmin = use.min()
 		#tmax = use.max()
-		tmin = mean-std*thresh
-		tmax = mean+std*thresh
+		tmin = options['mean']-options['std']*options['thresh']
+		tmax = options['mean']+options['std']*options['thresh']
 		use = use - tmin
 		dvsor = (tmax - tmin)
 		use = (use / dvsor) * 255
 
 		im = Image.fromarray(np.array(use, dtype='uint8'))
-		#not sure if i should use gmtime() or localtime()
-		#looks like it needs to be localtime()
-		#time.mktime() can be used to make these timestamps...
-		# print time.mktime(time.localtime(ts)), ts
-		flname = prefix+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(fm['LTime']))+'-'+str(entry['MSTime'])+'.png'
-		#flname = prefix+'-'+str(fm['LTime'])+'-'+str(fm['MSTime'])+'.png'
+		flname = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(fm['LTime']))+'-'+str(fm['MSTime'])+'.png'
 		im.save(op.join(usedir, flname))
+		return self #allows for chaining
 
 	def makevid(self, imgdir, viddir = ''):
 		if viddir == '':
@@ -590,6 +657,7 @@ class DB:
 			print('createposnvideos: CalledProcessError on azel: ', azel)
 		else:
 			print('SUCCESS')
+		return self #allows for chaining
 
 ##END OF DB CLASS##
 
