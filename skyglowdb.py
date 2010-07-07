@@ -5,11 +5,15 @@
 # and manipulate a sqlite database
 # for working with skyglow
 
-#Useful for getting set up in terminal:
 '''
+#Useful for getting set up in terminal:
 import skyglowdb
 reload(skyglowdb); db = skyglowdb.DB("/home/drew/prj/data/")
 reload(skyglowdb); bdb = skyglowdb.DB("/media/lavag")
+
+A test of the slewing frame cleanup, and command chaining:
+db.restore().fixPositions(graph=1).graphPositions()
+This will restore the db using the backup, fix the data, and show two graphs...
 '''
 
 import time, sys
@@ -66,6 +70,7 @@ class DB:
 			print "Done."
 		else:
 			print "Unchanged."
+		return self
 
 	def restore(self):
 		print "Are you sure you want to overwrite the current database with the backup?"
@@ -75,6 +80,7 @@ class DB:
 			print "Done."
 		else:
 			print "Unchanged."
+		return self
 
 	def sqlDict(self, c = None):
 		if c == None:
@@ -297,7 +303,7 @@ class DB:
 	#		+1 : merge right
 	#		-1 : merge left
 	#	}
-	def merge(self, c, data, i, direction):
+	def merge(self, data, i, direction, perm = True):
 		use = 0
 		if direction == 0: #do both sides
 			use = i+1
@@ -305,17 +311,19 @@ class DB:
 			use = i+(abs(direction)/direction) #i+1 or i-1
 		data[i]['az'] = data[use]['az']
 		data[i]['el'] = data[use]['el']
-		if (direction < 0):
+		if (direction <= 0):
 			data[i]['start'] = data[i-1]['start']
 			data[i]['count'] += data[i-1]['count']
-		if (direction > 0):
+		if (direction >= 0):
 			data[i]['end'] = data[i+1]['end']
 			data[i]['count'] += data[i+1]['count']
 		if direction == 0:
-			self.c.execute("delete from `positions` where rowid=? or rowid=?",(data[i-1]['rowid'],data[i+1]['rowid']))
+			if perm:
+				self.c.execute("delete from `positions` where rowid=? or rowid=?",(data[i-1]['rowid'],data[i+1]['rowid']))
 			del data[i+1], data[i-1]
 		else:
-			self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
+			if perm:
+				self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
 			del data[use]
 		return data
 
@@ -350,64 +358,22 @@ class DB:
 					prev = i-1
 				ne = data[next]
 				pe = data[prev]
-				#use = prev #default is to extend the previous entry
-				#rem = i
 				if e['count'] < 200 and e['az'] != 361 and e['el'] != 361: #small fragment that is not a slewing frame
-					# i want the first pass to just fill up the blanks in the slewing frames
+					# i want the first few passes to just fill up the blanks in the slewing frames
 					if passnum < 2:
 						if pe['az'] == ne['az'] and pe['el'] == ne['el'] and pe['az'] == 361 and pe['el'] == 361:
-							e['count'] += pe['count'] + ne['count']
-							e['start'] = pe['start']
-							e['end'] = ne['end']
-							e['az'] = ne['az']
-							e['el'] = ne['el']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=? or rowid=?",(pe['rowid'],ne['rowid']))
-							del data[next], data[prev]
-							#not working yet:						
-							#data = merge(c, data, i, 0)
+							data = self.merge(data, i, 0, perm)
 					else:
 						if pe['az'] == ne['az'] and pe['el'] == ne['el']: #azel on either side are equivalent
-							e['count'] += pe['count'] + ne['count']
-							e['start'] = pe['start']
-							e['end'] = ne['end']
-							e['az'] = ne['az']
-							e['el'] = ne['el']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=? or rowid=?",(pe['rowid'],ne['rowid']))
-							del data[next], data[prev]
+							data = self.merge(data, i, 0, perm)
 						elif e['az'] == ne['az'] and e['el'] == ne['el']: #same azel as right side
-							e['az'] = ne['az']
-							e['el'] = ne['el']
-							e['end'] = ne['end']
-							e['count'] += ne['count']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=?",(ne['rowid'],))
-							del data[next]
+							data = self.merge(data, i, 1, perm)
 						elif e['az'] == pe['az'] and e['el'] == pe['el']: #same azel as left side
-							e['az'] = pe['az']
-							e['el'] = pe['el']
-							e['count'] += pe['count']
-							e['start'] = pe['start']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=?",(pe['rowid'],))
-							del data[prev]
+							data = self.merge(data, i, -1, perm)
 						elif ne['az'] == 361 and ne['el'] == 361: #next position is a slewing frame
-							e['az'] = ne['az']
-							e['el'] = ne['el']
-							e['end'] = ne['end']
-							e['count'] += ne['count']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=?",(ne['rowid'],))
-							del data[next]
+							data = self.merge(data, i, 1, perm)
 						elif pe['az'] == 361 and pe['el'] == 361: #prev position is a slewing frame
-							e['az'] = pe['az']
-							e['el'] = pe['el']
-							e['count'] += pe['count']
-							e['start'] = pe['start']
-							if perm:
-								self.c.execute("delete from `positions` where rowid=?",(pe['rowid'],))
-							del data[prev]
+							data = self.merge(data, i, -1, perm)
 						else: #dont know what else to do with you, so just make it into slewing frames
 							e['az'] = 361
 							e['el'] = 361
@@ -511,12 +477,17 @@ class DB:
 		histodata = np.clip(dtfl,bins[tmin],bins[tmax])
 		'''
 
-
-	# this takes data (from sql) in sqlDict() form: [{'a':1, 'b':2}, {'a':3,'b':4}, ...]
-	# entry is expected to contain "file", and "ix"
-	# write images (normal, and nostar) to file
-	# options = dict('mean':None, 'std':None, 'thresh':5, 'az':None, 'el':None, 'dir':None)
-	#  if these values are not set, it will use appropriate defaults...
+	#Purpose: pull image data from IMG files, write out images as png after applying a filter.
+	# entry = img data from sql
+	#  - may be in sqlDict() form: [{'file':"file/loc.img", 'ix':123}, {'file':"file/loc.img", 'ix':321}, ...]
+	#  - or it may be a dictionary in the form: {'file':"file/loc", 'ix':123}
+	#  - "file", and "ix" are required fields
+	#  - if this is a list of many entries (dictionaries), it will do each entry recursively.
+	# imgtype defines which filter to use
+	#  - can be either "regular" or "nostar" (possibly more to come)
+	# options = dict('mean':None, 'std':None, 'thresh':5, 'dir':None)
+	#  - mean, std, thresh are used for scaling, these will be determined on a frame by frame basis if left blank.
+	#  - dir is the directory where the images should go. Default is '...rootdir/images'
 	def writeimage(self, entry, imgtype, resultsdir = None, options = {}):
 		#dostarremoval = Truev =
 		#image types:
@@ -535,12 +506,6 @@ class DB:
 			else:
 				raise RuntimeError('writeimage: Entry variable is invalid.')
 
-		if not 'az' in options and not 'el' in options:
-			if 'az' in entry and 'el' in entry:
-				options['az'] = entry['az']
-				options['el'] = entry['el']
-			else:
-				raise RuntimeError('writeimage: No azel supplied for image.')
 		if not 'thresh' in options:
 			options['thresh'] = 5
 
