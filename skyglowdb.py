@@ -128,21 +128,18 @@ class DB:
 
 		if rebuild:
 			self.c.execute("drop table positions")
-		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT, mean SMALLINT, std SMALLINT, min SMALLINT, max SMALLINT)")
+		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
 
 		if rebuild:
 			self.c.execute("drop table frames")
-		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT, min SMALLINT, max SMALLINT)")
+		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
 		lastel = 0
 		lastaz = 0
 		lastlt = 0
 		startlt = 0
 		first = True
 		count = 0
-		tallymean = list()
-		tallystd = list()
-		tallymin = list()
-		tallymax = list()
+		#d['time'] = time.localtime(md['LTime'])
 		first = True
 		for img in imgfiles:
 			uadata = ud.UAVData(img)
@@ -166,11 +163,9 @@ class DB:
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
-					tmin = dtfl.min()
-					tmax = dtfl.max()
-					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd, tmin, tmax]
+					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd]
 					#print values
-					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
 						el = 361
@@ -196,9 +191,94 @@ class DB:
 		self.conn.commit()
 		return self #allows for chaining
 
-	#################
-	#end of build db#
-	#################
+	###################################
+	# buildDB                         #
+	#---------------------------------#
+	# this builds the database..      #
+	#  it populates the frames table, #
+	#  and the positions table.       #
+	###################################
+	def doFrames(self, rebuild = False):
+		imgfiles = []
+		imgfiles[:] = self.locate('*.img', self.rootdir)
+		imgfiles.sort()
+		print (imgfiles)
+
+		if rebuild:
+			self.c.execute("drop table frames")
+		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
+		lastlt = 0
+		irradpcount = 0.105 # nW / cm2 / um  per  count
+		for img in imgfiles:
+			uadata = ud.UAVData(img)
+			print "Data Entries: ", len(uadata)
+			#positions = dict()
+			then = time.time()
+			for x in range(len(uadata)):
+				d = uadata.frame(x)
+				az = round(d['TargetAzimuth'], 1)
+				el = round(d['TargetElevation'], 1)
+				lt = d['LTime']
+				ms = d['MSTime']
+
+				#this should take a frame every second
+				if lastlt != lt:
+					dtfl = np.array(d['Data'], dtype='float32')
+					tmean = dtfl.mean()*irradpcount
+					tstd = dtfl.std()*irradpcount
+					tmin = int(dtfl.min()*irradpcount)
+					tmax = int(dtfl.max()*irradpcount)
+					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd, tmin, tmax]
+					#print values
+					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+
+				lastlt = lt
+			now = time.time()
+			bench = (now - then)
+			print bench, " seconds"
+			sys.stdout.flush()
+		# Save (commit) the changes
+		self.conn.commit()
+		return self #allows for chaining
+
+
+	def doPositions(self, rebuild = False):
+		if rebuild:
+			self.c.execute("drop table positions")
+		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
+		frames = self.query("SELECT * from frames order by lt")
+		lastel = 0
+		lastaz = 0
+		lastlt = 0
+		startlt = 0
+		first = True
+		count = 0
+		for x in frames:
+			az = x['az']
+			el = x['el']
+			lt = x['lt']
+			if first:
+				lastel = el
+				lastaz = az
+				lastlt = lt
+				first = False
+			if x['mean'] < 25: #static frames
+				az = 361
+				el = 361
+			#this doesnt work because there are errors in the data, so i'll fix the data later
+			if (az != lastaz or el != lastel): #new position detection
+				values = [lastaz, lastel, startlt, lastlt, count]
+				#print values
+				self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
+				startlt = lt
+				count = 0
+			
+			count += 1
+			
+			lastel = el
+			lastaz = az
+			lastlt = lt
+
 
 	def doPasses(self, rebuild = False):
 		if rebuild:	
@@ -259,45 +339,7 @@ class DB:
 				print "   Nothing"
 		return self #allows for chaining
 			
-	'''
-	This wont really work... Needs greater detail than what 1 second frames can give...
-	def doPositions(self, rebuild = False):
-		if rebuild:
-			self.c.execute("drop table positions")
-		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
-		frames = self.query("SELECT * from frames order by lt")
-		lastel = 0
-		lastaz = 0
-		lastlt = 0
-		startlt = 0
-		first = True
-		count = 0
-		for x in frames:
-			az = x['az']
-			el = x['el']
-			lt = x['lt']
-			if first:
-				lastel = el
-				lastaz = az
-				lastlt = lt
-				first = False
-			if x['mean'] < 250: #static frames
-				az = 361
-				el = 361
-			#this doesnt work because there are errors in the data, so i'll fix the data later
-			if (az != lastaz or el != lastel): #new position detection
-				values = [lastaz, lastel, startlt, lastlt, count]
-				#print values
-				self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
-				startlt = lt
-				count = 0
-			
-			count += x['count']
-			
-			lastel = el
-			lastaz = az
-			lastlt = lt
-	'''
+
 	
 	#This function is intended to be used to merge positions
 	#data = list of dictionary data from db
@@ -332,6 +374,76 @@ class DB:
 				self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
 			del data[use]
 		return data
+
+
+	def redoPositions(self, perm = True, graph = False):
+		print "Cleaning up the data"
+		self.c.execute("select rowid,* from `positions` ")
+		data = self.sqlDict()
+		if not perm:
+			graph=True
+		if graph:
+			#use this later to graph the original data
+			original = list()
+			for x in data:
+				for z in range(x['count']):
+					original.append(x['az']+x['el'])
+				#original.append(0)
+	
+		prev = 0
+		next = 0
+		#this loop will make the algorithm do a few passes
+		for passnum in range(5):
+			#go through the list of dictionaries
+			for i, e in enumerate(data):
+				if i == len(data)-1:
+					next = i
+				else:
+					next = i+1
+				if i == 0:
+					prev = 0
+				else:
+					prev = i-1
+				ne = data[next]
+				pe = data[prev]
+				if e['count'] < 3 and e['az'] != 361 and e['el'] != 361: #small fragment that is not a slewing frame
+					# i want the first few passes to just fill up the blanks in the slewing frames
+					if passnum < 2:
+						if pe['az'] == ne['az'] and pe['el'] == ne['el'] and pe['az'] == 361 and pe['el'] == 361:
+							data = self.merge(data, i, 0, perm)
+					else:
+						if pe['az'] == ne['az'] and pe['el'] == ne['el']: #azel on either side are equivalent
+							data = self.merge(data, i, 0, perm)
+						elif e['az'] == ne['az'] and e['el'] == ne['el']: #same azel as right side
+							data = self.merge(data, i, 1, perm)
+						elif e['az'] == pe['az'] and e['el'] == pe['el']: #same azel as left side
+							data = self.merge(data, i, -1, perm)
+						elif ne['az'] == 361 and ne['el'] == 361: #next position is a slewing frame
+							data = self.merge(data, i, 1, perm)
+						elif pe['az'] == 361 and pe['el'] == 361: #prev position is a slewing frame
+							data = self.merge(data, i, -1, perm)
+						else: #dont know what else to do with you, so just make it into slewing frames
+							e['az'] = 361
+							e['el'] = 361
+					if perm:
+						self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+
+		if graph:
+			show = list()
+			for x in data:
+				for z in range(x['count']):
+					show.append(x['az']+x['el'])
+				#show.append(0)	
+			#draw the graph
+			fig = plt.figure()
+			ax = fig.add_subplot(111)
+			ax.plot(show, linewidth=2)
+			ax.plot(original, linewidth=1)
+			plt.show()
+	
+		# Save (commit) the changes
+		self.conn.commit()
+		return self #allows for chaining
 
 	
 	#fixPositions will go through the "positions" table and attempt to clean up erros
@@ -630,9 +742,8 @@ class DB:
 		valid = {"regular":self.imgRegular, "nostar":self.imgNostar}
 		if not imgtype.lower() in valid:
 			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
-
-		if not opt.has_key('thresh'):
-			opt['thresh'] = 5
+		print entry
+		opt['thresh'] = opt.get('thresh', 5)
 		#open the file
 		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
 		fm = uadata.frame(entry['ix'])
@@ -642,13 +753,12 @@ class DB:
 		dtfl *= irradpcount
 		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
 
-		if not opt.has_key('mean') in opt or not opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
+		if opt.has_key('mean') in opt and opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
+			opt['mean'] *= irradpcount
+			opt['std'] *= irradpcount			
+		else:#use whatever works for this image
 			opt['mean'] = dtfl.mean()
 			opt['std'] =  dtfl.std()
-		else:
-			opt['mean'] *= irradpcount
-			opt['std'] *= irradpcount
-
 
 		use = valid[imgtype](dtfl, opt) #apply the appropriate filter
 		#use = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
