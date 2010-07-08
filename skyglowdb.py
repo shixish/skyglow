@@ -25,6 +25,7 @@ import os.path as op
 import uavdata as ud
 import sqlite3
 
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -127,18 +128,21 @@ class DB:
 
 		if rebuild:
 			self.c.execute("drop table positions")
-		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT)")
+		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT, mean SMALLINT, std SMALLINT, min SMALLINT, max SMALLINT)")
 
 		if rebuild:
 			self.c.execute("drop table frames")
-		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT)")
+		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean SMALLINT, std SMALLINT, min SMALLINT, max SMALLINT)")
 		lastel = 0
 		lastaz = 0
 		lastlt = 0
 		startlt = 0
 		first = True
 		count = 0
-		#d['time'] = time.localtime(md['LTime'])
+		tallymean = list()
+		tallystd = list()
+		tallymin = list()
+		tallymax = list()
 		first = True
 		for img in imgfiles:
 			uadata = ud.UAVData(img)
@@ -162,9 +166,11 @@ class DB:
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()
 					tstd = dtfl.std()
-					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd]
+					tmin = dtfl.min()
+					tmax = dtfl.max()
+					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd, tmin, tmax]
 					#print values
-					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std) VALUES(?,?,?,?,?,?,?,?)", values)
+					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
 					if tmean < 250: #static frames
 						az = 361
 						el = 361
@@ -405,7 +411,7 @@ class DB:
 	#not currently in use... 
 	#TODO:: make more helper functions like this
 	def getFrames(self, frm, to):
-		self.query("select idx, file, ix from `frames` where idx>=? and idx<=? order by idx", (frm, to))
+		return self.query("select * from `frames` where lt>=? and lt<=? order by lt", (frm, to))
 
 	def query(self, query, var = []):
 		if len(var) > 0:	
@@ -495,37 +501,138 @@ class DB:
 	# opt = dict('mean':None, 'std':None, 'thresh':5, 'dir':None)
 	#  - mean, std, thresh are used for scaling, these will be determined on a frame by frame basis if left blank.
 	#  - dir is the directory where the images should go. Default is '...rootdir/images'
-	def writeimage(self, entry, imgtype = "regular", resultsdir = None, opt = {}):
-		#dostarremoval = Truev =
-		#image types:
-		#regular
-		#nostar
-		#collage
-		imgtype = imgtype.lower() #enforce lower case
-		valid = {"regular":self.imgRegular, "nostar":self.imgNostar}
-		if not imgtype in valid:
-			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
-		if type(entry) == list:#if given the whole list, just do all of them recursively
-			if len(entry):
-				if len(entry) > 1:
-					self.writeimage(entry[1:], imgtype, opt)
-				entry = entry[0]
+	def writeImg(self, entry, imgtype = "regular", opt = {}):
+		if type(entry) == list: #if we have a list of entries, just do them all recursively...
+				if len(entry):
+					if len(entry) > 1:
+						self.writeImg(entry[1:], imgtype, opt)
+					entry = entry[0]
+				else:
+					raise RuntimeError('writeImg: Invalid list of entries.')
+		
+		imgdata = {}
+		flname = "default.png"
+		if type(entry) == dict:#if just given one entry put it in a list...
+			if entry.has_key("img"):
+				imgdata = entry
+			elif entry.has_key("file"):
+				imgdata = self.getImg(entry, imgtype, opt)
 			else:
-				raise RuntimeError('writeimage: Entry variable is invalid.')
-
-		if not 'thresh' in opt:
-			opt['thresh'] = 5
-
-		if not 'dir' in opt:
-			imagesdir = op.join(self.rootdir, 'images')
-		else:
-			imagesdir = opt['dir']
-		if not op.isdir(imagesdir):
-		  os.makedirs(imagesdir)
-		usedir = op.join(imagesdir, imgtype)
+				raise RuntimeError('writeImg: Invalid "entry" value.')
+			flname = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(imgdata['lt']))+'-'+str(imgdata['ms'])+'.png'
+		elif isinstance(entry,Image.Image):
+			imgdata['img'] = entry
+		
+		imgdir = opt.get('dir', op.join(self.rootdir, 'images'))
+		if not op.isdir(imgdir):
+		  os.makedirs(imgdir)
+		usedir = op.join(imgdir, imgtype)
 		if not op.isdir(usedir):
 		  os.makedirs(usedir)
 
+		imgdata['img'].save(op.join(usedir, flname))
+		return self #allows for chaining
+	
+	def writeCollage(self):
+		passes = self.query("select * from passes")
+		#pas = self.getFrames(passes[0]['start'], passes[0]['end'])
+		#pas = self.getFrames(passes[0]['start'], passes[0]['start']+5)
+		#this will simply grab a representative frame of each available position
+		usepass = 0;
+		pas = self.query("select frames.* from frames, positions where frames.lt = ROUND((positions.start+positions.end)/2, 0) and positions.el != 361 and positions.az != 361 and positions.start >= ? and positions.end <= ?", (passes[usepass]['start'], passes[usepass]['end']))
+		#cheap hack for now
+		dimentions = (2940,2940)
+		bigim = Image.new('RGB', dimentions)
+		origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image
+		#lssrmean = 
+		for n in range(len(pas)):#pas:
+			p = pas[n]
+			#print p
+			imgdata = self.getImg(p)
+	
+			#print('convert im to RGB')
+			#sys.stdout.flush()
+	
+			imcl = imgdata['img'].convert('RGBA')
+			#f = ImageFont.load_default()
+
+			irradpcount = 0.105 # nW / cm2 / um  per  count
+			d = ImageDraw.Draw(imcl)
+			d.text( (0, 0), u'{0} ({1}, {2})'.format(round(p['mean']*irradpcount, 2), round(p['az'], 1), round(p['el'], 1)), fill='#00ff00')
+			#imcl.show()
+			pasteloc = (80, 30, 30, 30)
+			#pasteloc = (pl_w, pl_n, pl_e, pl_s)
+	
+			x,y = imcl.size
+			rotation = 0
+			if p['el'] != 90:
+				rotation = -(p['az']-90)
+			imcl = imcl.rotate(rotation, expand = 1)
+			#imcl.show()
+			x,y = imcl.size
+			#distance from the origin is related to the elevation
+			distance = (90-p['el'])*22
+			#print p['el'], p['az'], distance
+			#imcl.show()
+			#this code will get the distance from the origin...
+			# the "- x/2" part is adjusting for the center of imcl,
+			nx = origin[0] + math.cos(p['az']*math.pi/180)*distance - x/2
+			ny = origin[1] + math.sin(p['az']*math.pi/180)*distance - y/2
+			bigim.paste(imcl, (nx,ny), imcl)
+		
+			'''
+			#print('appazel2 imcl')
+			#sys.stdout.flush()
+			el = p['el']
+			if el == 0:
+				el = 15
+			imadj = appazel2(p['az'], el, imcl, totdegrs)
+			#print('convert imcl to L')
+			#sys.stdout.flush()
+			immsk = imadj.convert('L')
+			#print('calc mask values')
+			#sys.stdout.flush()
+			immsk.putdata(map(lambda x: 255 if x > 0 else 0, immsk.getdata()))
+			#print('paste into bigim')
+			#sys.stdout.flush()
+			#bigim.putdata(map(lambda a, b: (a[0] + b[0], a[1] + b[1], a[2] + b[2]), bigim.getdata(), imadj.getdata()))
+			bigim.paste(imadj, (0, 0), immsk)
+			#print('pasted ({0}, {1})'.format(round(p['az'], 1), round(p['el'], 1)))
+			sys.stdout.flush()
+			#bigim = Image.composite(bigim, imadj)
+			'''
+		#bigim.show()
+		self.writeImg(bigim)
+		'''
+		p = pas[0]
+
+		d = ImageDraw.Draw(bigim)
+		avgstr = 'mean:{0}'.format(round(p['nspassmean'], 2))
+		passstr = 'pass:{0:0>3}'.format(p['passid'])
+		datestr = '{0}-{1:0>2}-{2:0>2}'.format(p['date_year'], p['date_month'], p['date_day'])
+		timestr = '{0:0>2}:{1:0>2}:{2:0>2}'.format(p['date_hours'], p['date_minutes'], p['date_seconds'])
+		d.text( (0, 0), avgstr + ' ' + passstr + ' ' + datestr + ' ' + timestr, font=monofontbg, fill='#00ff00')
+		bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
+		bimpt = op.join(climagesdir, bimnm)
+		bigim.save(bimpt)
+		print('{0:3d}/{1:3d}   {2}'.format(i, ncolgs, bimpt))
+		sys.stdout.flush()
+		'''
+
+	def doImg(self):
+		entry = self.query("select * from frames limit 158,5 ")
+		for e in entry:
+			img = self.getImg(e)
+			self.writeImg(img)
+
+ 
+	def getImg(self, entry, imgtype = "regular", opt={}):
+		valid = {"regular":self.imgRegular, "nostar":self.imgNostar}
+		if not imgtype.lower() in valid:
+			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
+
+		if not opt.has_key('thresh'):
+			opt['thresh'] = 5
 		#open the file
 		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
 		fm = uadata.frame(entry['ix'])
@@ -535,36 +642,29 @@ class DB:
 		dtfl *= irradpcount
 		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
 
-
-		if not 'mean' in opt or not 'std' in opt: #if some scale factor isnt supplied, use whatever works for this image
+		if not opt.has_key('mean') in opt or not opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
 			opt['mean'] = dtfl.mean()
 			opt['std'] =  dtfl.std()
 		else:
 			opt['mean'] *= irradpcount
 			opt['std'] *= irradpcount
 
-		'''
-		print "--", entry['idx'], "--"
-		print 'rgmin:', regular.min()
-		print 'rgmax:', regular.max()
-		print 'rgmean:', regular.mean()
-		print 'rgstdev:', regular.std()
-		'''
 
 		use = valid[imgtype](dtfl, opt) #apply the appropriate filter
+		#use = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
 
-		if 'graph' in opt:
+		if opt.has_key('graph'):
 			fig = plt.figure()
 			ax = fig.add_subplot(111)
-			
+		
 			ax.plot(use)
 			ax.plot([use.mean()+use.std()]*len(use), linewidth=2, color="b")
 			ax.plot([use.mean()-use.std()]*len(use), linewidth=2, color="b")
-		
+	
 			ax.plot([use.mean()+use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
 			ax.plot([use.mean()-use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
-				
-	
+			
+
 			'''
 			ax.plot(histodata)
 			ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
@@ -586,13 +686,12 @@ class DB:
 		use = use - tmin
 		dvsor = (tmax - tmin)
 		use = (use / dvsor) * 255
-
 		im = Image.fromarray(np.array(use, dtype='uint8'))
-		flname = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(fm['LTime']))+'-'+str(fm['MSTime'])+'.png'
-		im.save(op.join(usedir, flname))
-		return self #allows for chaining
+		ret = {"lt":fm['LTime'], "ms":fm['MSTime'], "img":im}
+		#im.show()
+		return ret
 
-	def makevid(self, imgdir, viddir = ''):
+	def makeVid(self, imgdir, viddir = ''):
 		if viddir == '':
 			viddir = imgdir
 		if not op.isdir(imgdir):
