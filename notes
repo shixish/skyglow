@@ -14,3 +14,6 @@ print db.query("SELECT strftime('%Y', lt, 'unixepoch', 'localtime') as year, lt 
 
 q = db.query("select * from frames limit 145, 1")
 
+handy command for renaming files in terminal:
+for f in *.img.h; do mv "$f" "${f%}.h"; done
+for f in *.img.h; do mv "$f" "${f%.img.h}.img"; done
