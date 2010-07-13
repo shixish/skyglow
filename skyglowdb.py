@@ -42,13 +42,9 @@ import glob
 import subprocess
 
 #used for images
-from PIL import Image, ImageFont, ImageDraw, ImageOps, ImageEnhance
+from PIL import Image, ImageFont, ImageDraw#, ImageOps, ImageEnhance
 
 import fnmatch, os
-
-class q:
-	def __init__(self, ok):
-		print ok
 
 class DB:
 	def __init__(self, rootdir=None, debug=False):
@@ -130,7 +126,10 @@ class DB:
 	def getFrames(self, frm, to):
 		return self.query("select * from `frames` where lt>=? and lt<=? order by lt", (frm, to))
 
-	#This is a powerful accessor function that allows you to pull out specific data.
+	#This is a powerful accessor function that allows you to pull specific data from the db.
+	#The general form is
+	#	The first table name contains the data you want to extract,
+	#	The second table name is used as the condition...
 	#General Notes:
 	#		Both "one" and "two" (if used) need to be valid table names.
 	#		"where" can be an SQL string or a dictionary which may contain multiple conditions.
@@ -142,10 +141,10 @@ class DB:
 	#		translates to: db.get("frames", "passes", {"rowid":2})
 	#	"get positions in the night where start = 1268118808"
 	#		translates to: db.get("positions", "nights", {"start":1268118808})
-	#Reversed direction
+	#Reversed:
 	#	"get the passes that include position 3" (only one will exsist)
 	#		translates to: db.get("passes", "positions", {"rowid":3})
-	#Single table selection
+	#Single table selection:
 	#	"get positions where rowid = 1"
 	#		translates to: db.get("positions", where={"rowid":3})
 	#					  or:	db.get("positions", "", {"rowid":3})
@@ -160,13 +159,19 @@ class DB:
 	#				Also, notice "positions." can be omitted from "positions.start"
 	#					since the query deals with only one table.
 	def get(self, one, two = "", where={}, limit=""):
+		start = time.time()
 		single = ("lt", "lt")
 		double = ("start", "end")
 		vals = {"frames":single, "positions":double, "passes":double, "nights":double}
 		#unfortunately vals.keys() wont work, because it doesn't retain its order.
 		chain = ["frames", "positions", "passes", "nights"]
+		#store some common abreviations that can be used as an alternative to the full table name...
+		alias = {"frame":"frames", "frm":"frames", "position":"positions", "pos":"positions", "pass":"passes", "pas":"passes", "night":"nights", "nit":"nights"}
 		if two == "":
 			two = one
+		#this will attempt to set the value of "one" to "alias[one]", otherwise set it to w/e it already is...
+		one = alias.get(one, one)
+		two = alias.get(two, two)
 		if type(where) == dict:
 			where = where.copy() #it passes by reference, and im destroying values...
 			wherestr = ""
@@ -180,7 +185,7 @@ class DB:
 			if where.get('rep', 0):
 				middle = "ROUND(("+two+"."+vals[two][0]+"+"+two+"."+vals[two][1]+")/2, 0)"
 				wherestr += one+"."+vals[one][0]+" <= "+middle+" and "+one+"."+vals[one][1]+" >= "+middle + " and "			
-			else:
+			elif one != two:
 				try:
 					oix = chain.index(one)
 					tix = chain.index(two)
@@ -203,7 +208,7 @@ class DB:
 			wherestr = where
 		if limit != "":
 			limit = " limit " + str(limit)
-		query = "select "+one+".* from "+one
+		query = "select "+one+".*,"+one+".rowid from "+one
 		if one != two:
 			query += ","+two
 			if wherestr == "":
@@ -213,9 +218,11 @@ class DB:
 		if wherestr != "":
 			query += " where "+wherestr
 		query += limit
-		print query
+		if self.debug:
+			print query
 		#old = 'select frames.* from frames, positions where frames.lt <= ROUND((positions.start+positions.end)/2, 0) and frames.lt >= ROUND((positions.start+positions.end)/2, 0) and positions.el != 361 and positions.az != 361 and positions.start >= 15 and positions.end <= 20"'
 		#print old, query==old
+		print "Query took:", round(time.time() - start, 4), "seconds."
 		return self.query(query)
 
 	def getFrameInfo(self, lt):
@@ -544,164 +551,190 @@ class DB:
 		plt.show()
 		return self #allows for chaining
 
-	#Various data cleanup algorithms used by writeimage()
-	def imgRegular(self, dtfl, opt):
-		return np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
+	def writePosImgs(self):
+		#need to loop through the different nights in order to scale it using that nights average...
+		nights = self.get("nights")
+		for n in nights:
+			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(n['start'],n['end'])}, 2)
+			opt = {"mean":n['mean'], "std":n['std']}
+			self.writeImg(frames, "regular", opt)
+			#self.writeImg("nostar", opt)
 
-	def imgNostar(self, dtfl, opt):
-		return medianfilt2(dtfl, 9)
+	def writePassCollages(self):
+		passes = self.get("passes")
+		for p in passes:
+			#this will give you the "night" information for this pass, it can then be used for scaling if desired.
+			n = self.get("night", "passes", {"rowid":p['rowid']})
+			#this will produce representative (non slewing) frames from every position within this pass.
+			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
+			opt = {"mean":p['mean'], "std":p['std']}
+			self.writeCollage(frames, "regular", opt)
+
+	def filepath(self, imgtype, imgfilter, opt):
+		opt['lt'] = opt.get("lt", None)
+		opt['ms'] = opt.get("ms", None)
+		#this is going to build the filename if one isn't provided
+		if opt['lt'] and not opt.has_key('name'):
+			opt['name'] = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(opt['lt']))
+			if opt['ms']:
+				opt['name'] += '-'+str(opt['ms'])
+		#all else fails, make the name "default"
+		opt['name'] = opt.get('name', "default") + ".png"
+
+		if opt['lt']:
+			nit = dbtime.dbtime(opt['lt'])
+			nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
+			#print nit.strftime("%Y%m%d"), time.strftime("%Y%m%d", time.localtime(opt['lt']))
+			#night = time.strftime("%Y%m%d", time.localtime(opt['lt']))
+			night = nit.strftime("%Y%m%d")
+		else:
+			night = "unknown"
+		if opt.has_key("fulldir"):
+			return op.join(opt['fulldir'], opt['name'])
+		else:
+			datadir = opt.get("rootdir", op.join(self.rootdir, "dataproducts"))
+			nightdir = op.join(datadir, night)
+			typedir = op.join(nightdir, imgtype)
+			filterdir = op.join(typedir, imgfilter)
+			if not op.isdir(filterdir):
+			  os.makedirs(filterdir)
+			return op.join(filterdir, opt['name'])
+
+	#Given a db "frames" entry, this returns the image data as a PIL.Image.Image...
+	#This is also where filters are applied.
+	def getImg(self, entry, imgtype = "regular", opt={}):
+		valid = {"regular":imgRegular, "nostar":imgNostar}
+		if not imgtype.lower() in valid:
+			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
+
+		#path = self.filepath(entry, imgtype, opt)
+		#The scaling options might be different, so this might not be a good idea...
+		#if op.isfile(path):
+		#	return Image.open(path)
+		#open the file
+		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
+		fm = uadata.frame(entry['ix'])
+		#make it into a numpy array
+		dtfl = np.array(fm['Data'], dtype='float32')
+		irradpcount = 0.105 # nW / cm2 / um  per  count
+		dtfl *= irradpcount
+		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
+
+		if not opt.has_key('mean') in opt or not opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
+			#this should be the same as entry['mean'], entry['std']...
+			opt['mean'] = dtfl.mean()
+			opt['std'] =  dtfl.std()
+		
 	
-	#this one gets rid of the spikes...
-	#this one left a few artifacts from the removal, so i dont think its an ideal solution...
-	def imgSpikeless(self, dtfl, opt):
-		'''
-		spikeless = dtfl
-		factor = 3
-		for c,y in enumerate(spikeless):
-			for i,e in enumerate(y):
-				if e > tmean+tstd*factor or e < tmean-tstd*factor:
-					spikeless[c][i] = tmean
-				
-					#print i, e
-		'''
+		use = valid[imgtype](dtfl, opt) #apply the appropriate filter
 
-	#this is my attempt at using the histogram data to clear up inconsistencies...
-	def imgHisto(self, dtfl, opt):
-		'''
-		fig = plt.figure()
-		ax = fig.add_subplot(111)
-		(n, bins) = np.histogram(dtfl, bins=100)
-		#ax.plot(.5*(bins[1:]+bins[:-1]), n)
-		plt.show()
-		'''
+		#use = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
 
-		#this also works...	
-		'''
-		(n, bins) = np.histogram(dtfl, bins=100)
-		tmin = 0
-		tmax = 0
-		findmin = True
-		for i,e in enumerate(bins):
-			if n[i] > 5:
-				findmin = False
-			if n[i] <= 5:
-				if findmin:			
-					tmin = i
-				else:
-					tmax = i
-					break
-		print "min:", bins[tmin], "max:", bins[tmax]
+		if opt.has_key('graph'):
+			fig = plt.nfigure()
+			ax = fig.add_subplot(111)
+		
+			ax.plot(use)
+			ax.plot([use.mean()+use.std()]*len(use), linewidth=2, color="b")
+			ax.plot([use.mean()-use.std()]*len(use), linewidth=2, color="b")
 	
-		histodata = np.clip(dtfl,bins[tmin],bins[tmax])
-		'''
+			ax.plot([use.mean()+use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
+			ax.plot([use.mean()-use.std()*opt['thresh']]*len(use), linewidth=2, color="r")	
+			plt.show()
+
+		#stretch values across 0-255
+		#tmin = use.min()
+		#tmax = use.max()
+		tmin = opt['mean']-opt['std']*opt['thresh']
+		tmax = opt['mean']+opt['std']*opt['thresh']
+		use = use - tmin
+		dvsor = (tmax - tmin)
+		use = (use / dvsor) * 255
+		return Image.fromarray(np.array(use, dtype='uint8'))
 
 	#Purpose: pull image data from IMG files, write out images as png after applying a filter.
 	# entry = img data from sql
 	#  - may be in sqlDict() form: [{'file':"file/loc.img", 'ix':123}, {'file':"file/loc.img", 'ix':321}, ...]
-	#  - or it may be a dictionary in the form: {'file':"file/loc", 'ix':123}
+	#  - or it may be a single dictionary in the form: {'file':"file/loc", 'ix':123}
 	#  - "file", and "ix" are required fields
-	#  - if this is a list of many entries (dictionaries), it will do each entry recursively.
-	# imgtype defines which filter to use
+	# imgfilter defines which filter to use (useful for different scaling methods)
 	#  - can be either "regular" or "nostar" (possibly more to come)
-	# opt = dict('mean':None, 'std':None, 'thresh':5, 'dir':None)
-	#  - mean, std, thresh are used for scaling, these will be determined on a frame by frame basis if left blank.
-	#  - dir is the directory where the images should go. Default is '...rootdir/images'
-	def writeImg(self, entry, imgtype = "regular", opt = {}):
-		if type(entry) == list: #if we have a list of entries, just do them all recursively...
-				if len(entry):
-					if len(entry) > 1:
-						self.writeImg(entry[1:], imgtype, opt)
-					entry = entry[0]
+	# opt is a generic dictionary that contains information that is to be used for scaling, and saving the file.
+	#		ex: opt = dict('mean':None, 'std':None, 'thresh':5, 'dir':None, 'name':None ...)
+	# Scaling options
+	#		These options are used for "regular" scaling:
+	#		mean - The mean of the image data, this may be an average mean.
+	#		std - Standard deviation of the image, this may be an average std.
+	#			If not specified, mean and std will be automatically determined.
+	#		thresh - This is the multiplier that determines how many times standard deviation the image data should be cropped at.
+	#			Default: 5
+	# Naming options
+	#		rootdir - the directory where the file tree should go. Default is '...rootdir/dataproducts'
+	#		fulldir - if set, this will be the exact directory where the image will be placed.
+	#		name - This is the filename you want to use. 
+	#					If not specified it tries to produce one, if it can't it will produce "default.png"
+	def writeImg(self, entries, imgfilter="regular", opt={}):
+		use = entries
+		if type(entries) != list:
+			use = [entries]
+		img = None
+		for entry in use:
+			this_opt = opt.copy()
+			if type(entry) == dict:#if just given one entry put it in a list...
+				if entry.has_key("file"):
+					img = self.getImg(entry, imgfilter, opt)
 				else:
-					raise RuntimeError('writeImg: Invalid list of entries.')
-		imgdata = {}
-		opt = opt.copy()
-		
-		if type(entry) == dict:#if just given one entry put it in a list...
-			if entry.has_key("img"):
-				imgdata = entry
-			elif entry.has_key("file"):
-				imgdata = self.getImg(entry, imgtype, opt)
+					raise RuntimeError('writeImg: Invalid entry(dict) field.')
+				this_opt['lt'] = opt.get("lt", entry.get("lt", None))
+				this_opt['ms'] = opt.get("ms", entry.get("ms", None))
+			elif isinstance(entry,Image.Image):
+				img = entry
+				this_opt['lt'] = opt.get("lt", None)
+				this_opt['ms'] = opt.get("ms", None)		
 			else:
-				raise RuntimeError('writeImg: Invalid entry(dict) field.')
-			opt['lt'] = opt.get("lt", entry.get("lt", None))
-			opt['ms'] = opt.get("ms", entry.get("ms", None))
-		elif isinstance(entry,Image.Image):
-			imgdata['img'] = entry
-			opt['lt'] = opt.get("lt", None)
-			opt['ms'] = opt.get("ms", None)		
-		else:
-			raise RuntimeError("writeImg: Invalid entry field.")	
-		
-		if opt['lt'] and not opt.has_key('name'):
-			opt['name'] = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(imgdata['lt']))
-			if opt['ms']:
-				opt['name'] += '-'+str(imgdata['ms'])
-
-		opt['name'] = opt.get('name', "default")
-		opt['name'] += ".png"
-		if opt['lt']:
-			night = time.strftime("%Y%m%d", time.localtime(opt['lt']))
-		else:
-			night = "unknown"
-		
-		datadir = opt.get("dir", op.join(self.rootdir, "dataproducts"))
-		nightdir = op.join(datadir, night)
-		imgdir = op.join(nightdir, 'images')
-		usedir = op.join(imgdir, imgtype)
-		if not op.isdir(usedir):
-		  os.makedirs(usedir)
-
-		imgdata['img'].save(op.join(usedir, opt['name']))
+				raise RuntimeError("writeImg: Invalid entry field.")	
+			#this is going to build the filename if one isn't provided
+			path = self.filepath("images", imgfilter, this_opt)
+			print path
+			img.save(path)
 		return self #allows for chaining
 	
-	def writeCollage(self):
-		passes = self.query("select rowid,* from passes")
-		#pas = self.getFrames(passes[0]['start'], passes[0]['end'])
-		#pas = self.getFrames(passes[0]['start'], passes[0]['start']+5)
-		#this will simply grab a representative frame of each available position
-		#cheap hack for now
-		dimentions = (2940,2940)
-		bigim = Image.new('RGB', dimentions)
-		origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image
-		usepass = 0;
-		#pas = self.query("select frames.* from frames, positions where frames.lt <= ROUND((positions.start+positions.end)/2, 0) and frames.lt >= ROUND((positions.start+positions.end)/2, 0) and positions.el != 361 and positions.az != 361 and positions.start >= ? and positions.end <= ?", (passes[usepass]['start'], passes[usepass]['end']))
-		conditions = {'slewing':False, 'rep':True, 'between':(passes[usepass]['start'], passes[usepass]['end'])}		
-		pas = self.get("frames", "positions", where=conditions)
+	def writeCollage(self, entries, imgfilter = "regular", opt = {}):
+		if type(entries) != list:
+			raise RuntimeError("writeCollage: \"entires\" must be a list of db entries.")
+		this_opt = opt.copy()
+		this_opt['lt'] = opt.get('lt', entries[0]['lt'])
+		path = self.filepath("collages", imgfilter, this_opt)
 		
-		for n in range(len(pas)):#pas:
-			p = pas[n]
-			#print p
-			imgdata = self.getImg(p)
-	
-			#print('convert im to RGB')
-			#sys.stdout.flush()
-	
-			imcl = imgdata['img'].convert('RGBA')
+		#somewhat cheap hack for now:
+		dimentions = (2940,2940)
+		bigimg = Image.new('RGB', dimentions)
+		origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image		
+		for e in entries:#pas:
+			img = self.getImg(e, imgfilter, this_opt)
+			imcl = img.convert('RGBA')
 			#f = ImageFont.load_default()
 
-			irradpcount = 0.105 # nW / cm2 / um  per  count
 			d = ImageDraw.Draw(imcl)
-			d.text( (0, 0), u'{0} ({1}, {2})'.format(round(p['mean']*irradpcount, 2), round(p['az'], 1), round(p['el'], 1)), fill='#00ff00')
+			d.text( (0, 0), u'{0} ({1}, {2})'.format(round(e['mean'], 2), round(e['az'], 1), round(e['el'], 1)), fill='#00ff00')
 			#imcl.show()
 	
 			#rotation = 0
 			#if p['el'] != 90:
 				#rotation = -(p['az']-90)
-			rotation = -(p['az']-90)
+			rotation = -(e['az']-90)
 			imcl = imcl.rotate(rotation, expand = 1)
 			#imcl.show()
 			w,h = imcl.size
 			#distance from the origin is related to the elevation
-			distance = (90-p['el'])*22
-			#print p['el'], p['az'], distance
+			distance = (90-e['el'])*22
 			#imcl.show()
 			#this code will get the distance from the origin...
 			# the "- x/2" part is adjusting for the center of imcl,
-			nx = origin[0] + math.cos(p['az']*math.pi/180)*distance - w/2
-			ny = origin[1] + math.sin(p['az']*math.pi/180)*distance - h/2
-			bigim.paste(imcl, (nx,ny), imcl)
-		
+			nx = origin[0] + math.cos(e['az']*math.pi/180)*distance - w/2
+			ny = origin[1] + math.sin(e['az']*math.pi/180)*distance - h/2
+			bigimg.paste(imcl, (nx,ny), imcl)
+			
 			'''
 			#print('appazel2 imcl')
 			#sys.stdout.flush()
@@ -723,8 +756,16 @@ class DB:
 			sys.stdout.flush()
 			#bigim = Image.composite(bigim, imadj)
 			'''
-		#bigim.show()
-		self.writeImg(bigim, opt={"name":"collage"})
+		#bigimg.show()
+		#self.writeImg(bigim, opt={"name":"collage"})
+		if opt.has_key('mean') and opt.has_key('std'):
+			thresh = opt.get('thresh', 5)
+			buff = opt['std']*thresh
+			tmax = opt.get('max', opt['mean']+buff)
+			tmin = opt.get('min', opt['mean']-buff)
+			grad = self.makeGradient(20, 400, opt['mean'], opt['std'], tmin, tmax)
+			bigimg.paste(grad, (10,10))
+		bigimg.save(path)
 		'''
 		p = pas[0]
 
@@ -741,73 +782,32 @@ class DB:
 		sys.stdout.flush()
 		'''
 
-	def doImg(self):
-		entry = self.query("select * from frames limit 158,5 ")
-		for e in entry:
-			img = self.getImg(e)
-			self.writeImg(img)
-
- 
-	def getImg(self, entry, imgtype = "regular", opt={}):
-		valid = {"regular":self.imgRegular, "nostar":self.imgNostar}
-		if not imgtype.lower() in valid:
-			raise RuntimeError('writeimage: Invalid image type. Valid entries:', keys(valid))
-
-		opt['thresh'] = opt.get('thresh', 5)
-		#open the file
-		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
-		fm = uadata.frame(entry['ix'])
-		#make it into a numpy array
-		dtfl = np.array(fm['Data'], dtype='float32')
-		irradpcount = 0.105 # nW / cm2 / um  per  count
-		dtfl *= irradpcount
-		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
-
-		if not opt.has_key('mean') in opt or not opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
-			#this should be the same as entry['mean'], entry['std']...
-			opt['mean'] = dtfl.mean()
-			opt['std'] =  dtfl.std()
-
-		use = valid[imgtype](dtfl, opt) #apply the appropriate filter
-		#use = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
-
-		if opt.has_key('graph'):
-			fig = plt.figure()
-			ax = fig.add_subplot(111)
-		
-			ax.plot(use)
-			ax.plot([use.mean()+use.std()]*len(use), linewidth=2, color="b")
-			ax.plot([use.mean()-use.std()]*len(use), linewidth=2, color="b")
-	
-			ax.plot([use.mean()+use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
-			ax.plot([use.mean()-use.std()*opt['thresh']]*len(use), linewidth=2, color="r")
-			
-
-			'''
-			ax.plot(histodata)
-			ax.plot([histodata.mean()+histodata.std()]*len(histodata), linewidth=2)
-			ax.plot([histodata.mean()-histodata.std()]*len(histodata), linewidth=2)
-			'''
-
-			'''
-			ax.plot(nostar)
-			ax.plot([nostar.mean()+nostar.std()]*len(nostar), linewidth=2)
-			ax.plot([nostar.mean()-nostar.std()]*len(nostar), linewidth=2)
-			'''	
-			plt.show()
-
-		#stretch values across 0-255
-		#tmin = use.min()
-		#tmax = use.max()
-		tmin = opt['mean']-opt['std']*opt['thresh']
-		tmax = opt['mean']+opt['std']*opt['thresh']
-		use = use - tmin
-		dvsor = (tmax - tmin)
-		use = (use / dvsor) * 255
-		entry['img'] = Image.fromarray(np.array(use, dtype='uint8'))
-		#ret = {"lt":fm['LTime'], "ms":fm['MSTime'], "img":im}
-		#im.show()
-		return entry
+	def makeGradient(self, width=20, height=400, tmean=4, tstd=.5, tmin=0, tmax=10):
+		use = np.array(range(255,0,-1), dtype='uint8')
+		use.shape = (255,1)
+		dimentions = (2940,2940)
+		ret = Image.new('RGBA', (width+45,height))
+		im = Image.fromarray(np.array(use, dtype='uint8'))
+		im = im.resize((width, height))
+		ret.paste(im, (0,0))
+		draw = ImageDraw.Draw(ret)
+		color = (0,255,0)
+		draw.rectangle((0,0)+(width,height-1), outline=(128,128,128))
+		draw.line((0, 0)+(width+4, 0), fill=color)
+		draw.text((width+10, 0), u'{0}'.format(round(tmax, 2)), fill=color)
+		draw.line((0, height-1)+(width+4, height-1), fill=color)
+		draw.text((width+10, height-10), u'{0}'.format(round(tmin, 2)), fill=color)
+		factor = float(height)/(float(tmax)-float(tmin))
+		meanloc = height-(float(tmean)-float(tmin))*factor
+		stdval = float(tstd)*factor
+		draw.line((width-4, meanloc)+(width+4, meanloc), fill=color)
+		draw.text((width+10, meanloc-5), u'{0}'.format(round(tmean, 2)), fill=color)
+		draw.line((width-2, meanloc+stdval)+(width+2, meanloc+stdval), fill=color)
+		draw.line((width-2, meanloc-stdval)+(width+2, meanloc-stdval), fill=color)
+		del draw
+		#ret.show()
+		return ret
+		#im.save(sys.stdout, "PNG")
 
 	def makeVid(self, imgdir, viddir = ''):
 		if viddir == '':
@@ -848,10 +848,62 @@ class DB:
 			print('SUCCESS')
 		return self #allows for chaining
 
-##END OF DB CLASS##
+##END OF CLASS##
 
 #i'm leaving these out of the class because they don't really need to make use of any member variables,
 #so i figured they don't need to exsist in every instance of the DB class...
+
+#Various scaling algorithms used by getImg()
+def imgRegular(dtfl, opt):
+	opt['thresh'] = opt.get('thresh', 5)
+	return np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
+
+def imgNostar(dtfl, opt):
+	return medianfilt2(dtfl, 9)
+
+#this one gets rid of the spikes...
+#this one left a few artifacts from the removal, so i dont think its an ideal solution...
+def imgSpikeless(dtfl, opt):
+	'''
+	spikeless = dtfl
+	factor = 3
+	for c,y in enumerate(spikeless):
+		for i,e in enumerate(y):
+			if e > tmean+tstd*factor or e < tmean-tstd*factor:
+				spikeless[c][i] = tmean
+			
+				#print i, e
+	'''
+
+#this is my attempt at using the histogram data to clear up inconsistencies...
+def imgHisto(dtfl, opt):
+	'''
+	fig = plt.figure()
+	ax = fig.add_subplot(111)
+	(n, bins) = np.histogram(dtfl, bins=100)
+	#ax.plot(.5*(bins[1:]+bins[:-1]), n)
+	plt.show()
+	'''
+
+	#this also works...	
+	'''
+	(n, bins) = np.histogram(dtfl, bins=100)
+	tmin = 0
+	tmax = 0
+	findmin = True
+	for i,e in enumerate(bins):
+		if n[i] > 5:
+			findmin = False
+		if n[i] <= 5:
+			if findmin:			
+				tmin = i
+			else:
+				tmax = i
+				break
+	print "min:", bins[tmin], "max:", bins[tmax]
+
+	histodata = np.clip(dtfl,bins[tmin],bins[tmax])
+	'''
 
 #used for creating the "nostar" images in the writeimage() function
 def pad(orgarr, newshp, padval=0, center=False):
