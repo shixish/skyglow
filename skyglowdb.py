@@ -47,6 +47,11 @@ from PIL import Image, ImageFont, ImageDraw#, ImageOps, ImageEnhance
 import fnmatch, os
 
 class DB:
+	rootdir = ""	
+	con = None
+	c = None
+	debug = None
+
 	def __init__(self, rootdir=None, debug=False):
 		if rootdir == None:
 			rootdir = os.path.abspath(os.curdir)
@@ -131,11 +136,16 @@ class DB:
 	#	The first table name contains the data you want to extract,
 	#	The second table name is used as the condition...
 	#General Notes:
-	#		Both "one" and "two" (if used) need to be valid table names.
-	#		"where" can be an SQL string or a dictionary which may contain multiple conditions.
-	#		if "where" is an SQL string, variables should be prefixed with the second table's name if using two tables:
-	#			ex: "passes.rowid = 2 and passes.start = ..."
-	#		"limit" can be specified to limit the number of results
+	#	Both "one" and "two" (if used) need to be valid table names.
+	#		Change: You can now use several abreviations for the table names...
+	#	"where" can be an SQL string or a dictionary which may contain multiple conditions.
+	#		Also added some special keys available though the "where" dictionary:
+	#		"slewing" (Bool) : 0 = no slewing, 1 = only slewing, None = Default
+	#		"rep" (Bool) : This will attempt to find a representative frame, instead of getting every frame.
+	#		"betweem" (Tuple(first, second)) : Restrict the lt variable of the conditional table to be between a range.
+	#	if "where" is an SQL string, variables should be prefixed with the second table's name if using two tables:
+	#		ex: "passes.rowid = 2 and passes.start = ..."
+	#	"limit" can be specified to limit the number of results
 	#Examples:
 	#	"get frames in pass number 2"
 	#		translates to: db.get("frames", "passes", {"rowid":2})
@@ -158,7 +168,7 @@ class DB:
 	#		Note: Read the documentation on dbtime for more variation here...
 	#				Also, notice "positions." can be omitted from "positions.start"
 	#					since the query deals with only one table.
-	def get(self, one, two = "", where={}, limit=""):
+	def get(self, one, two = "", where={}, limit="", alert=False):
 		start = time.time()
 		single = ("lt", "lt")
 		double = ("start", "end")
@@ -177,9 +187,9 @@ class DB:
 			wherestr = ""
 			if where.has_key('slewing'):
 				if where['slewing']:
-					wherestr += two+".az = 361 and "+two+".el = 361 and "
+					wherestr += one+".az = 361 and "+one+".el = 361 and "
 				else:
-					wherestr += two+".az != 361 and "+two+".el != 361 and "
+					wherestr += one+".az != 361 and "+one+".el != 361 and "
 				del where['slewing']
 			
 			if where.get('rep', 0):
@@ -222,11 +232,21 @@ class DB:
 			print query
 		#old = 'select frames.* from frames, positions where frames.lt <= ROUND((positions.start+positions.end)/2, 0) and frames.lt >= ROUND((positions.start+positions.end)/2, 0) and positions.el != 361 and positions.az != 361 and positions.start >= 15 and positions.end <= 20"'
 		#print old, query==old
-		print "Query took:", round(time.time() - start, 4), "seconds."
+		if alert:
+			print "Query took:", (time.time() - start), "seconds."
 		return self.query(query)
 
-	def getFrameInfo(self, lt):
-		return self.query("select frames.*,positions.rowid as position,passes.rowid as pass,nights.rowid as night from frames,positions,passes,nights where frames.lt=? and (lt between positions.start and positions.end) and (lt between passes.start and passes.end) and (lt between nights.start and nights.end)", (lt,))
+	def getFrameInfo(self, lt, alert = False):
+		start = time.time()
+		select = "frames.*,positions.std as pos_std,positions.mean as pos_mean,passes.std as pas_std,passes.mean as pas_mean,nights.std as nit_std,nights.mean as nit_mean"
+		where = "frames.lt=? and (frames.lt between positions.start and positions.end) and (frames.lt between passes.start and passes.end) and (frames.lt between nights.start and nights.end)"
+		ret = self.query("select "+select+" from frames,positions,passes,nights where "+where, (lt,))
+		if alert:		
+			print "Query took:", round(time.time() - start, 4), "seconds."
+		if ret:
+			return ret[0]
+		else:
+			return None
 
 	def getAvgStats(self, start, end, table = "frames"):
 		if table == "frames":
@@ -255,6 +275,8 @@ class DB:
 	#  of indexing a drive            #
 	###################################
 	def build(self, rebuild = False, fix = True):
+		start = time.time()
+		print "*Starting to build the entire database."
 		self.findFiles()
 		self.doFrames(rebuild)
 		self.doPositions(rebuild)
@@ -263,10 +285,11 @@ class DB:
 		self.doPasses(rebuild)
 		self.doNights(rebuild)
 		self.doStats()
-		print 'Hard drive indexing complete!'
+		print "*Hard drive indexing complete! (", (time.time() - start), "seconds )"
 		return self #allows for chaining
 
 	def doFrames(self, rebuild = False):
+		start = time.time()
 		print "Building frames data"
 		if rebuild:
 			self.c.execute("drop table frames")
@@ -297,10 +320,11 @@ class DB:
 					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
 
 				lastlt = lt
-			print (time.time() - then), " seconds"
+			print "\tFile done. (", (time.time() - then), " seconds)"
 			sys.stdout.flush()
 		# Save (commit) the changes
 		self.conn.commit()
+		print "Frames done! (", (time.time() - start), "seconds )"
 		return self #allows for chaining
 
 
@@ -349,7 +373,7 @@ class DB:
 		self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Done! (", (time.time() - start), "seconds )"
+		print "Positions done! (", (time.time() - start), "seconds )"
 		return self
 
 	#passes will exclude some slewing frames, since slewing frames in between passes cannot be easilly accounted for.
@@ -361,7 +385,7 @@ class DB:
 		self.c.execute("create table `passes` (start INT UNIQUE, end INT UNIQUE, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
 
 		#start running some stats
-		data = self.query("select rowid,* from `positions` where az!=361 and el!=361")
+		data = self.query("select rowid,* from `positions` where az!=361 and el!=361 order by start")
 		firstdata = data[0]
 		counts = []
 		lastdata = data[0]
@@ -382,7 +406,7 @@ class DB:
 			plt.show()
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Done! (", (time.time() - start), "seconds )"
+		print "Passes done! (", (time.time() - start), "seconds )"
 		return self
 
 	def doNights(self, rebuild = False):
@@ -417,19 +441,20 @@ class DB:
 				print "   Nothing"
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Done! (", (time.time() - start), "seconds )"
+		print "Nights done! (", (time.time() - start), "seconds )"
 		return self
 			
 	def doStats(self):
 		print "Completing statistics"
 		chain = ["frames", "positions", "passes", "nights"]
 		for c in range(1,len(chain)):
-			for x in self.query("select * from "+chain[c]):
+			for x in self.query("select *,rowid from "+chain[c]):
 				stats = self.getAvgStats(x['start'], x['end'], chain[c-1])
-				self.query("update `"+chain[c]+"` set "+self.sqlDataString(stats))
+				#print chain[c], stats
+				self.query("update `"+chain[c]+"` set "+self.sqlDataString(stats)+" where rowid="+str(x['rowid']))
 	
 	#This function is intended to be used to merge positions
-	#data = list of dictionary data from db
+	#data = list of dictionary data from dbh
 	#i = index of thing to merge
 	#perm = to make the changes permanent (change the database)
 	#direction = 
@@ -532,7 +557,7 @@ class DB:
 	
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Done! (", (time.time() - start), "seconds )"
+		print "Data cleanup done! (", (time.time() - start), "seconds )"
 		return self
 
 	#this will create a bar graph representing the positions data.
@@ -551,16 +576,59 @@ class DB:
 		plt.show()
 		return self #allows for chaining
 
+	##Start of data products##
+	def doDataPoducts(self):
+		start = time.time()
+		print "*Writing data products."
+		self.writeDetails()
+		self.writePosImgs()
+		self.writePassCollages()
+		print "*Data products done! (", (time.time() - start), "seconds )"
+
+
+	def writeDetails(self, fileloc = "detaildata.txt"):
+		start = time.time()
+		print "Writing details data."
+		
+		grab = ['lt', 'el', 'az', 'min', 'max', 'mean', 'std'] #removed ms because its meaningless
+		grab += ['pos_mean', 'pos_std']
+		grab += ['pas_mean', 'pas_std']
+		grab += ['nit_mean', 'nit_std']
+		grab += ['file', 'ix']
+		lines = [reduce(lambda a,b: a+" "+b,grab)+"\n"]
+		for n in self.get("nights"):
+			udir = self.getNightPath({'lt':n['start']})# op.join(self.rootdir, "dataproducts")
+			tfile = open(op.join(udir, "documents", fileloc), "w")
+			for f in self.get("frames", where={"slewing":0, "between":(n['start'], n['end'])}):
+				dat = self.getFrameInfo(f['lt'])
+				vals = [] #need to do it one at t a time if i want it in order...
+				if dat: #if the thing is empty the loop will have problems...
+					for g in grab:
+						val = dat[g]
+						#if type(val) == float:
+						#	val = round(val, 6)
+						vals.append(val)
+				if vals:
+					lines.append(reduce(lambda a,b: str(a)+" "+str(b),vals)+"\n")
+			tfile.writelines(lines)
+			tfile.close()
+		print "Details done! (", (time.time() - start), "seconds )"
+
 	def writePosImgs(self):
+		start = time.time()
+		print "Writing position images (scaled by night)."
 		#need to loop through the different nights in order to scale it using that nights average...
 		nights = self.get("nights")
 		for n in nights:
-			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(n['start'],n['end'])}, 2)
+			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(n['start'],n['end'])})
 			opt = {"mean":n['mean'], "std":n['std']}
 			self.writeImg(frames, "regular", opt)
 			#self.writeImg("nostar", opt)
+		print "Position images done! (", (time.time() - start), "seconds )"
 
 	def writePassCollages(self):
+		start = time.time()
+		print "Writing per pass collages (scaled by pass)."
 		passes = self.get("passes")
 		for p in passes:
 			#this will give you the "night" information for this pass, it can then be used for scaling if desired.
@@ -569,36 +637,42 @@ class DB:
 			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
 			opt = {"mean":p['mean'], "std":p['std']}
 			self.writeCollage(frames, "regular", opt)
+		print "Pass collages done! (", (time.time() - start), "seconds )"
+	
+	def getImgPath(self, imgtype, imgfilter, opt={}):
+		fullpath = op.join(self.getNightPath(opt), imgtype, imgfilter)
+		if not op.isdir(fullpath):
+			  os.makedirs(fullpath)
+		return op.join(fullpath, self.getFilename(opt))
 
-	def filepath(self, imgtype, imgfilter, opt):
-		opt['lt'] = opt.get("lt", None)
-		opt['ms'] = opt.get("ms", None)
+	def getFilename(self, opt={}):
 		#this is going to build the filename if one isn't provided
-		if opt['lt'] and not opt.has_key('name'):
-			opt['name'] = imgtype+'-'+time.strftime("%Y%m%d-%H%M%S", time.localtime(opt['lt']))
-			if opt['ms']:
+		if opt.get('lt') and not opt.get('name'):
+			opt['name'] = time.strftime("%Y%m%d-%H%M%S", time.localtime(opt['lt']))
+			if opt.get('ms'):
 				opt['name'] += '-'+str(opt['ms'])
+		else:
+			opt['name'] = "default"
 		#all else fails, make the name "default"
-		opt['name'] = opt.get('name', "default") + ".png"
+		return opt['name'] + ".png"
 
-		if opt['lt']:
+	def getNightPath(self, opt={}):
+		night = "unknown"
+		if opt.get('lt'):
 			nit = dbtime.dbtime(opt['lt'])
 			nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
-			#print nit.strftime("%Y%m%d"), time.strftime("%Y%m%d", time.localtime(opt['lt']))
-			#night = time.strftime("%Y%m%d", time.localtime(opt['lt']))
 			night = nit.strftime("%Y%m%d")
-		else:
-			night = "unknown"
+			
 		if opt.has_key("fulldir"):
 			return op.join(opt['fulldir'], opt['name'])
 		else:
 			datadir = opt.get("rootdir", op.join(self.rootdir, "dataproducts"))
 			nightdir = op.join(datadir, night)
-			typedir = op.join(nightdir, imgtype)
-			filterdir = op.join(typedir, imgfilter)
-			if not op.isdir(filterdir):
-			  os.makedirs(filterdir)
-			return op.join(filterdir, opt['name'])
+			#typedir = op.join(nightdir, imgtype)
+			#filterdir = op.join(typedir, imgfilter)
+			if not op.isdir(nightdir):
+			  os.makedirs(nightdir)
+			return nightdir;#op.join(filterdir, opt['name'])
 
 	#Given a db "frames" entry, this returns the image data as a PIL.Image.Image...
 	#This is also where filters are applied.
@@ -645,11 +719,7 @@ class DB:
 		#stretch values across 0-255
 		#tmin = use.min()
 		#tmax = use.max()
-		tmin = opt['mean']-opt['std']*opt['thresh']
-		tmax = opt['mean']+opt['std']*opt['thresh']
-		use = use - tmin
-		dvsor = (tmax - tmin)
-		use = (use / dvsor) * 255
+		
 		return Image.fromarray(np.array(use, dtype='uint8'))
 
 	#Purpose: pull image data from IMG files, write out images as png after applying a filter.
@@ -674,17 +744,15 @@ class DB:
 	#		name - This is the filename you want to use. 
 	#					If not specified it tries to produce one, if it can't it will produce "default.png"
 	def writeImg(self, entries, imgfilter="regular", opt={}):
+		start = time.time()
 		use = entries
 		if type(entries) != list:
 			use = [entries]
 		img = None
 		for entry in use:
 			this_opt = opt.copy()
-			if type(entry) == dict:#if just given one entry put it in a list...
-				if entry.has_key("file"):
-					img = self.getImg(entry, imgfilter, opt)
-				else:
-					raise RuntimeError('writeImg: Invalid entry(dict) field.')
+			if type(entry) == dict and entry.has_key("file"):#if just given one entry put it in a list...
+				img = self.getImg(entry, imgfilter, opt)
 				this_opt['lt'] = opt.get("lt", entry.get("lt", None))
 				this_opt['ms'] = opt.get("ms", entry.get("ms", None))
 			elif isinstance(entry,Image.Image):
@@ -694,12 +762,14 @@ class DB:
 			else:
 				raise RuntimeError("writeImg: Invalid entry field.")	
 			#this is going to build the filename if one isn't provided
-			path = self.filepath("images", imgfilter, this_opt)
-			print path
+			path = self.getImgPath("images", imgfilter, this_opt)
+			#print path
 			img.save(path)
+		print "\t",len(entries),imgfilter,"images done. (", (time.time() - start), "seconds )"
 		return self #allows for chaining
 	
 	def writeCollage(self, entries, imgfilter = "regular", opt = {}):
+		start = time.time()
 		if type(entries) != list:
 			raise RuntimeError("writeCollage: \"entires\" must be a list of db entries.")
 		this_opt = opt.copy()
@@ -722,17 +792,18 @@ class DB:
 			#rotation = 0
 			#if p['el'] != 90:
 				#rotation = -(p['az']-90)
-			rotation = -(e['az']-90)
+			info = self.get("positions", "frames", {"lt":e['lt']})[0]
+			rotation = -(info['az']-90)
 			imcl = imcl.rotate(rotation, expand = 1)
 			#imcl.show()
 			w,h = imcl.size
 			#distance from the origin is related to the elevation
-			distance = (90-e['el'])*22
+			distance = (90-info['el'])*22
 			#imcl.show()
 			#this code will get the distance from the origin...
 			# the "- x/2" part is adjusting for the center of imcl,
-			nx = origin[0] + math.cos(e['az']*math.pi/180)*distance - w/2
-			ny = origin[1] + math.sin(e['az']*math.pi/180)*distance - h/2
+			nx = origin[0] + math.cos(info['az']*math.pi/180)*distance - w/2
+			ny = origin[1] + math.sin(info['az']*math.pi/180)*distance - h/2
 			bigimg.paste(imcl, (nx,ny), imcl)
 			
 			'''
@@ -765,22 +836,24 @@ class DB:
 			tmin = opt.get('min', opt['mean']-buff)
 			grad = self.makeGradient(20, 400, opt['mean'], opt['std'], tmin, tmax)
 			bigimg.paste(grad, (10,10))
-		bigimg.save(path)
-		'''
-		p = pas[0]
 
-		d = ImageDraw.Draw(bigim)
-		avgstr = 'mean:{0}'.format(round(p['nspassmean'], 2))
-		passstr = 'pass:{0:0>3}'.format(p['passid'])
-		datestr = '{0}-{1:0>2}-{2:0>2}'.format(p['date_year'], p['date_month'], p['date_day'])
-		timestr = '{0:0>2}:{1:0>2}:{2:0>2}'.format(p['date_hours'], p['date_minutes'], p['date_seconds'])
-		d.text( (0, 0), avgstr + ' ' + passstr + ' ' + datestr + ' ' + timestr, font=monofontbg, fill='#00ff00')
-		bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
-		bimpt = op.join(climagesdir, bimnm)
-		bigim.save(bimpt)
-		print('{0:3d}/{1:3d}   {2}'.format(i, ncolgs, bimpt))
+		#monofontsm = ImageFont.load_default()
+		monofontbg = ImageFont.load_default()
+		#smfontsz = imgnrows / 10
+		#bgfontsz = smfontsz * 3
+		#if sys.platform != 'win32':
+		#	fontpath = '/usr/share/fonts/gnu-free/FreeMono.ttf'
+		#	monofontsm = ImageFont.truetype(fontpath, smfontsz)
+		#	monofontbg = ImageFont.truetype(fontpath, bgfontsz)
+
+		d = ImageDraw.Draw(bigimg)
+		timestr = dbtime.dbtime(e['lt']).strftime()
+		d.text((45, 0), timestr, font=monofontbg, fill='#00ff00')
+		#bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
 		sys.stdout.flush()
-		'''
+
+		bigimg.save(path)
+		print "\tCollage done. (", (time.time() - start), "seconds )"
 
 	def makeGradient(self, width=20, height=400, tmean=4, tstd=.5, tmin=0, tmax=10):
 		use = np.array(range(255,0,-1), dtype='uint8')
@@ -848,18 +921,103 @@ class DB:
 			print('SUCCESS')
 		return self #allows for chaining
 
+	def makeLatex(self):
+		basename = op.join(self.rootdir, "dataproducts", "20100308")
+		climagesdir = op.join(basename, "images", "regular")
+		clcatlogdir = op.join(basename, "documents")
+		if not op.isdir(clcatlogdir):
+			  os.makedirs(clcatlogdir)
+		tex = \
+"""% build a pdf like this:
+% $ pdflatex file.tex
+\\documentclass[letterpaper,12pt]{article}
+%\\usepackage[top=1in, bottom=1in, left=1in, right=1in]{geometry} 
+\\usepackage{fullpage}
+\\usepackage{float}
+\\usepackage{graphicx}
+\\newfloat{program}{thp}{lop}
+\\floatname{program}{Program}
+\\setcounter{section}{0}
+
+\\DeclareGraphicsExtensions{.png}
+"""
+
+		#datestr = '{0}-{1:0>2}-{2:0>2}'.format(cat[0]['date_year'], cat[0]['date_month'], cat[0]['date_day'])
+		datestr = "2010"
+
+		tex += u'\\title{SHAPS Collages Catalog ' + datestr + u'}\n'
+
+		tex += \
+"""
+\\author{Jason Addison\\\\
+\\small Textron Systems Corporation, Maui\\\\
+\\small \\texttt{jaddison@systems.textron.com}\\\\
+}
+"""
+
+		#tex += u'\\date{' + datetime.date.today().strftime('%B %d, %Y') + u'}\n'
+
+		tex += u'\\begin{document}\n'
+		tex += u'\\maketitle\n'
+		tex += u'\\pagebreak\n'
+		tex += u'\n'
+		tex += u'\n'
+		tex += u'\\pagestyle{myheadings}\n'
+		tex += u'\\markright{Textron Systems Corporation, Maui, 2010\\hfill}\n'
+		tex += u'\n'
+		tex += u'\\setcounter{section}{-1}\n'
+
+		colflnms = glob.glob(op.join(climagesdir, '*.png'))
+
+		for fn in colflnms:
+			tex += u'\\begin{figure}[!b]\n'
+			tex += u'\\begin{center}\n'
+			tex += u'\\includegraphics[width=7in]{../../images/collage/' + op.basename(fn) + u'}\n'
+			tex += u'\\end{center}\n'
+			tex += u'\\end{figure}\n'
+			tex += u'\\pagebreak\n'
+			tex += u'\\clearpage\n'
+
+		tex += u'\\end{document}\n'
+
+		#datestr2 = '{0}{1:0>2}{2:0>2}'.format(cat[0]['date_year'], cat[0]['date_month'], cat[0]['date_day'])
+		datestr2 = datestr
+
+		with open(op.join(clcatlogdir, 'catalog-collage-' + datestr2 + '.tex'), 'w') as outfile:
+			outfile.write(tex)
+
 ##END OF CLASS##
+
+#might try to break up the db and the dp...
+class DP(DB):
+	def __init__(self, rootdir=None, debug=False):
+		DB.__init__(self, rootdir, debug)
+		print self
+
+	
+
 
 #i'm leaving these out of the class because they don't really need to make use of any member variables,
 #so i figured they don't need to exsist in every instance of the DB class...
 
 #Various scaling algorithms used by getImg()
+def imgScaleNormally(dtfl, opt):
+	opt['thresh'] = opt.get('thresh', 5)
+	tmin = opt['mean']-opt['std']*opt['thresh']
+	tmax = opt['mean']+opt['std']*opt['thresh']
+	use = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
+	dtfl = dtfl - tmin
+	dvsor = (tmax - tmin)
+	return (dtfl / dvsor) * 255
+
 def imgRegular(dtfl, opt):
 	opt['thresh'] = opt.get('thresh', 5)
-	return np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
+	dtfl = np.clip(dtfl,opt['mean']-opt['std']*opt['thresh'],opt['mean']+opt['std']*opt['thresh'])
+	return imgScaleNormally(dtfl, opt)
 
 def imgNostar(dtfl, opt):
-	return medianfilt2(dtfl, 9)
+	dtfl = medianfilt2(dtfl, 9)
+	return imgScaleNormally(dtfl, opt)
 
 #this one gets rid of the spikes...
 #this one left a few artifacts from the removal, so i dont think its an ideal solution...
