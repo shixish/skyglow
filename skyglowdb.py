@@ -51,12 +51,13 @@ class DB:
 	con = None
 	c = None
 	debug = None
+	imgfiles = []
 
-	def __init__(self, rootdir=None, debug=False):
+	def __init__(self, rootdir=None, name="sql", debug=False):
 		if rootdir == None:
 			rootdir = os.path.abspath(os.curdir)
 		self.rootdir = rootdir
-		self.conn = sqlite3.connect(op.join(self.rootdir, 'sql'))
+		self.conn = sqlite3.connect(op.join(self.rootdir, name))
 		self.c = self.conn.cursor()
 		self.debug = debug
 
@@ -95,6 +96,33 @@ class DB:
 			print "Unchanged."
 		return self
 
+	def delete(self):
+		print "Are you sure you want to DELETE the current database?"
+		answer = raw_input()
+		if len(answer) > 0 and answer[0].lower() == "y" or answer == "1":
+			os.remove(op.join(self.rootdir, 'sql'))
+			self.conn = sqlite3.connect(op.join(self.rootdir, 'sql'))
+			self.c = self.conn.cursor()
+			print "Done."
+		else:
+			print "Unchanged."
+		return self
+	
+	def collect(self, other):
+		print "Adding frames to this database..."
+		grab = ['lt','ms','az','el','file','ix','mean','std','min','max']
+		strgrab = reduce(lambda a,b:a+","+b,grab)
+		self.c.execute("create table if not exists `frames` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
+		vals = other.query("select %s from frames where exists(SELECT * from frames)"%strgrab)
+		for val in vals:
+			put = reduce(lambda a,b:a+","+b,map(lambda a:"'"+str(val[a])+"'",grab))
+			self.c.execute("insert or ignore into `frames` (%s) VALUES(%s)"%(strgrab, put))
+		self.doPositions()
+		self.redoPositions()
+		self.doPasses()
+		self.doNights()
+		self.doStats()
+	
 	def sqlDict(self, c = None):
 		if c == None:
 			c = self.c
@@ -109,65 +137,74 @@ class DB:
 			ret.append(vals)
 		return ret
 
-	def sqlDataString(self, data, prefix = ""):
+	def sqlDataString(self, data, prefix = "", delim=","):
+		def doString(prefix, i, val):
+			if type(val) == str:
+				return "%s%s='%s'"%(prefix, i, val)
+			return "%s%s=%s"%(prefix, i, val)
 		ret = ''
 		first = True
 		for i in data:
 			if first:
 				first = False
 			else:
-				ret+=','
+				ret+=delim
 			if prefix != "" and prefix[-1] != ".":
 				prefix += "."
-			ret += prefix+str(i)+"="+str(data[i])
+			if getattr(data[i], '__iter__', False):#this will detect if the thing is iterable
+				vals = []
+				for val in data[i]:
+					vals.append(doString(prefix, i, val))
+				ret += "(" + reduce(lambda a,b: str(a)+" or "+str(b),vals) + ")"
+			else:
+				ret += doString(prefix, i, data[i])
 		return ret	#this stuff isn't of any use atm, might be in the future...
 	
 	def findFiles(self):
-		self.imgfiles = []
 		self.imgfiles[:] = self.locate('*.img', self.rootdir)
 		self.imgfiles.sort()
-		print (self.imgfiles)
+		print "Found", len(self.imgfiles), "IMG files."
+		return self
 
-	def getFrames(self, frm, to):
-		return self.query("select * from `frames` where lt>=? and lt<=? order by lt", (frm, to))
-
-	#This is a powerful accessor function that allows you to pull specific data from the db.
-	#The general form is
-	#	The first table name contains the data you want to extract,
-	#	The second table name is used as the condition...
-	#General Notes:
-	#	Both "one" and "two" (if used) need to be valid table names.
-	#		Change: You can now use several abreviations for the table names...
-	#	"where" can be an SQL string or a dictionary which may contain multiple conditions.
-	#		Also added some special keys available though the "where" dictionary:
-	#		"slewing" (Bool) : 0 = no slewing, 1 = only slewing, None = Default
-	#		"rep" (Bool) : This will attempt to find a representative frame, instead of getting every frame.
-	#		"betweem" (Tuple(first, second)) : Restrict the lt variable of the conditional table to be between a range.
-	#	if "where" is an SQL string, variables should be prefixed with the second table's name if using two tables:
-	#		ex: "passes.rowid = 2 and passes.start = ..."
-	#	"limit" can be specified to limit the number of results
-	#Examples:
-	#	"get frames in pass number 2"
-	#		translates to: db.get("frames", "passes", {"rowid":2})
-	#	"get positions in the night where start = 1268118808"
-	#		translates to: db.get("positions", "nights", {"start":1268118808})
-	#Reversed:
-	#	"get the passes that include position 3" (only one will exsist)
-	#		translates to: db.get("passes", "positions", {"rowid":3})
-	#Single table selection:
-	#	"get positions where rowid = 1"
-	#		translates to: db.get("positions", where={"rowid":3})
-	#					  or:	db.get("positions", "", {"rowid":3})
-	#					  or:	db.get("positions", "positions", {"rowid":3})
-	#More Advanced Queries
-	#	"get positions that start after 1268118808"
-	#		db.get("positions", where="positions.start >= 1268118808")
-	#	"get positions that start before March 12th 2010"
-	#		maketime = str(dbtime.dbtime({"year":2010,"mon":3,"day":12}))
-	#		db.get("positions", where="start <= "+maketime)
-	#		Note: Read the documentation on dbtime for more variation here...
-	#				Also, notice "positions." can be omitted from "positions.start"
-	#					since the query deals with only one table.
+	'''
+	This is a powerful accessor function that allows you to pull specific data from the db.
+	The general form is
+		The first table name contains the data you want to extract,
+		The second table name is used as the condition...
+	General Notes:
+		Both "one" and "two" (if used) need to be valid table names.
+			Change: You can now use several abreviations for the table names...
+		"where" can be an SQL string or a dictionary which may contain multiple conditions.
+			Also added some special keys available though the "where" dictionary:
+			"slewing" (Bool) : 0 = no slewing, 1 = only slewing, None = Default
+			"rep" (Bool) : This will attempt to find a representative frame, instead of getting every frame.
+			"betweem" (Tuple(first, second)) : Restrict the lt variable of the conditional table to be between a range.
+		if "where" is an SQL string, variables should be prefixed with the second table's name if using two tables:
+			ex: "passes.rowid = 2 and passes.start = ..."
+		"limit" can be specified to limit the number of results
+	Examples:
+		"get frames in pass number 2"
+			translates to: db.get("frames", "passes", {"rowid":2})
+		"get positions in the night where start = 1268118808"
+			translates to: db.get("positions", "nights", {"start":1268118808})
+	Reversed:
+		"get the passes that include position 3" (only one will exsist)
+			translates to: db.get("passes", "positions", {"rowid":3})
+	Single table selection:
+		"get positions where rowid = 1"
+			translates to: db.get("positions", where={"rowid":3})
+						  or:	db.get("positions", "", {"rowid":3})
+						  or:	db.get("positions", "positions", {"rowid":3})
+	More Advanced Queries
+		"get positions that start after 1268118808"
+			db.get("positions", where="positions.start >= 1268118808")
+		"get positions that start before March 12th 2010"
+			maketime = str(dbtime.dbtime({"year":2010,"mon":3,"day":12}))
+			db.get("positions", where="start <= "+maketime)
+			Note: Read the documentation on dbtime for more variation here...
+					Also, notice "positions." can be omitted from "positions.start"
+						since the query deals with only one table.
+	'''
 	def get(self, one, two = "", where={}, limit="", alert=False):
 		start = time.time()
 		single = ("lt", "lt")
@@ -213,7 +250,7 @@ class DB:
 				if (type(where['between']) == tuple or type(where['between']) == list):
 					wherestr += two+"."+vals[two][0]+" >= "+str(where['between'][0])+" and "+two+"."+vals[two][1]+" <= "+str(where['between'][1])+" and "
 				del where['between']
-			wherestr += self.sqlDataString(where, two)
+			wherestr += self.sqlDataString(where, prefix=two, delim=" and ")
 		else:
 			wherestr = where
 		if limit != "":
@@ -266,34 +303,31 @@ class DB:
 		self.conn.commit()
 		return ret
 
-
-	###################################
-	# buildDB                         #
-	#---------------------------------#
-	# This builds the database..      #
-	#  It begins the complete process #
-	#  of indexing a drive            #
-	###################################
-	def build(self, rebuild = False, fix = True):
+	'''
+	Builds the database
+	It begins the complete process of indexing a drive
+	'''
+	def build(self, rebuild = False):
 		start = time.time()
 		print "*Starting to build the entire database."
-		self.findFiles()
+		if not self.imgfiles:
+			self.findFiles()
 		self.doFrames(rebuild)
-		self.doPositions(rebuild)
-		if fix:
-			self.redoPositions()
-		self.doPasses(rebuild)
-		self.doNights(rebuild)
+		self.doPositions()
+		self.redoPositions()
+		self.doPasses()
+		self.doNights()
 		self.doStats()
-		print "*Hard drive indexing complete! (", (time.time() - start), "seconds )"
+		now = ((time.time() - start)/60)
+		print "*Hard drive indexing complete! (", now, "minutes or", round(now/60,2), "hours )"
 		return self #allows for chaining
 
 	def doFrames(self, rebuild = False):
 		start = time.time()
 		print "Building frames data"
 		if rebuild:
-			self.c.execute("drop table frames")
-		self.c.execute("create table `frames` (lt SMALLINT, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
+			self.c.execute("drop table if exists frames")
+		self.c.execute("create table if not exists `frames` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
 		lastlt = 0
 		irradpcount = 0.105 # nW / cm2 / um  per  count
 		for img in self.imgfiles:
@@ -307,9 +341,15 @@ class DB:
 				el = round(d['TargetElevation'], 1)
 				lt = d['LTime']
 				ms = d['MSTime']
-
 				#this should take a frame every second
 				if lastlt != lt:
+					#i need some means of detecting that the file has already been read
+					#only check the first few values, don't bother checking after that...
+					if x < 125 and not rebuild:#this LT is already in the db
+						check = self.get("frames", where={"lt":lt, "ms":ms})
+						if check:
+							print "\t...", op.basename(img), "appears to already be indexed."
+							break; #we don't need to do this file...
 					dtfl = np.array(d['Data'], dtype='float32')
 					tmean = dtfl.mean()*irradpcount
 					tstd = dtfl.std()*irradpcount
@@ -317,23 +357,22 @@ class DB:
 					tmax = int(dtfl.max()*irradpcount)
 					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd, tmin, tmax]
 					#print values
-					self.c.execute("insert into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+					self.c.execute("insert or ignore into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
 
 				lastlt = lt
 			print "\tFile done. (", (time.time() - then), " seconds)"
 			sys.stdout.flush()
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Frames done! (", (time.time() - start), "seconds )"
+		print "Frames done! (", ((time.time() - start)/60), "minutes )"
 		return self #allows for chaining
 
 
-	def doPositions(self, rebuild = False):
+	def doPositions(self):
 		print "Detecting positions data"
 		start = time.time()
-		if rebuild:
-			self.c.execute("drop table positions")
-		self.c.execute("create table `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
+		self.c.execute("drop table if exists positions")
+		self.c.execute("create table if not exists `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
 		frames = self.query("SELECT * from frames order by lt")
 		lastel = 0
 		lastaz = 0
@@ -377,12 +416,11 @@ class DB:
 		return self
 
 	#passes will exclude some slewing frames, since slewing frames in between passes cannot be easilly accounted for.
-	def doPasses(self, rebuild = False):
+	def doPasses(self):
 		print "Detecting passes data"
 		start = time.time()
-		if rebuild:	
-			self.c.execute("drop table passes")
-		self.c.execute("create table `passes` (start INT UNIQUE, end INT UNIQUE, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
+		self.c.execute("drop table if exists passes")
+		self.c.execute("create table if not exists `passes` (start INT UNIQUE, end INT UNIQUE, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
 
 		#start running some stats
 		data = self.query("select rowid,* from `positions` where az!=361 and el!=361 order by start")
@@ -409,12 +447,11 @@ class DB:
 		print "Passes done! (", (time.time() - start), "seconds )"
 		return self
 
-	def doNights(self, rebuild = False):
+	def doNights(self):
 		print "Detecting nights data"
-		start = time.time()
-		if rebuild:	
-			self.c.execute("drop table nights")
-		self.c.execute("create table `nights` (start INT UNIQUE, end INT UNIQUE, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
+		time_start = time.time()
+		self.c.execute("drop table if exists nights")
+		self.c.execute("create table if not exists `nights` (start INT UNIQUE, end INT UNIQUE, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
 		days = self.query("SELECT lt from frames where lt%30=0 group by strftime('%Y-%m-%d', lt, 'unixepoch', 'localtime')")
 		#throwing this in just incase there is something before noon on the first detected day...		
 		justincase = dbtime.dbtime(days[0]['lt'])
@@ -441,7 +478,7 @@ class DB:
 				print "   Nothing"
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Nights done! (", (time.time() - start), "seconds )"
+		print "Nights done! (", (time.time() - time_start), "seconds )"
 		return self
 			
 	def doStats(self):
@@ -674,8 +711,10 @@ class DB:
 			  os.makedirs(nightdir)
 			return nightdir;#op.join(filterdir, opt['name'])
 
-	#Given a db "frames" entry, this returns the image data as a PIL.Image.Image...
-	#This is also where filters are applied.
+	'''
+	Given a db "frames" entry, this returns the image data as a PIL.Image.Image...
+	This is also where filters are applied.
+	'''
 	def getImg(self, entry, imgtype = "regular", opt={}):
 		valid = {"regular":imgRegular, "nostar":imgNostar}
 		if not imgtype.lower() in valid:
