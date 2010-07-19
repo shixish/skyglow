@@ -52,6 +52,9 @@ class DB:
 	c = None
 	debug = None
 	imgfiles = []
+	
+	#use this as a constant...
+	irradpcount = 0.105 # nW / cm2 / um  per  count
 
 	def __init__(self, rootdir=None, name="sql", debug=False):
 		if rootdir == None:
@@ -68,13 +71,27 @@ class DB:
 		self.c.close()
 		self.conn.close()
 
-	def locate(self, pattern, root=None):
+	def locate(self, pattern, depth=1, root=None):
+		# it doesn't need to crawl everything, just the first depth.
+		# Fix: use os.walk's pruning capabilities to cut off the tree at a certain length...
 		if not root:
 			root = self.rootdir
 		'''Locate all files matching supplied filename pattern in and below supplied root directory.'''
-		for path, dirs, files in os.walk(os.path.abspath(root)):
-			for filename in fnmatch.filter(files, pattern):
-				yield os.path.join(path, filename)
+		startinglevel = root.count(os.sep)
+		for path, dirs, files in os.walk(os.path.abspath(root), 1):
+			level = path.count(os.sep) - startinglevel
+			if level >= depth: #(uses "=" because its going from 1 based to 0 based).
+				del dirs[:] #prune off this branch
+			else:
+				for filename in fnmatch.filter(files, pattern):
+					yield os.path.join(path, filename)
+					
+	def findFiles(self, depth = 2):
+		start = time.time()
+		print "Finding Files"
+		self.imgfiles[:] = self.locate('*.img', depth)
+		self.imgfiles.sort()
+		self.timestamp("%s files found!"%(len(self.imgfiles)), start)
 
 	def backup(self):
 		print "Are you sure you want to overwrite any previous backup?"
@@ -108,6 +125,8 @@ class DB:
 			print "Unchanged."
 		return self
 	
+	#wanted to use "merge" but i guess its reserved.
+	#this will take a second database and merge their frames tables, then rebuild the derived tables.
 	def collect(self, other):
 		print "Adding frames to this database..."
 		grab = ['lt','ms','az','el','file','ix','mean','std','min','max']
@@ -160,12 +179,6 @@ class DB:
 				ret += doString(prefix, i, data[i])
 		return ret	#this stuff isn't of any use atm, might be in the future...
 	
-	def findFiles(self):
-		self.imgfiles[:] = self.locate('*.img', self.rootdir)
-		self.imgfiles.sort()
-		print "Found", len(self.imgfiles), "IMG files."
-		return self
-
 	'''
 	This is a powerful accessor function that allows you to pull specific data from the db.
 	The general form is
@@ -223,10 +236,14 @@ class DB:
 			where = where.copy() #it passes by reference, and im destroying values...
 			wherestr = ""
 			if where.has_key('slewing'):
-				if where['slewing']:
-					wherestr += one+".az = 361 and "+one+".el = 361 and "
+				if two == "positions":
+					if where['slewing']:
+						wherestr += two+".az = 361 and "+two+".el = 361 and "
+					else:
+						wherestr += two+".az != 361 and "+two+".el != 361 and "
 				else:
-					wherestr += one+".az != 361 and "+one+".el != 361 and "
+					#`positions` is the only table with accurate slewing information...
+					raise RuntimeError("get: Cannot use 'slewing' flag unless the second table is `positions`...")
 				del where['slewing']
 			
 			if where.get('rep', 0):
@@ -270,7 +287,7 @@ class DB:
 		#old = 'select frames.* from frames, positions where frames.lt <= ROUND((positions.start+positions.end)/2, 0) and frames.lt >= ROUND((positions.start+positions.end)/2, 0) and positions.el != 361 and positions.az != 361 and positions.start >= 15 and positions.end <= 20"'
 		#print old, query==old
 		if alert:
-			print "Query took:", (time.time() - start), "seconds."
+			self.timestamp("\tQuery Done.", start)
 		return self.query(query)
 
 	def getFrameInfo(self, lt, alert = False):
@@ -279,7 +296,7 @@ class DB:
 		where = "frames.lt=? and (frames.lt between positions.start and positions.end) and (frames.lt between passes.start and passes.end) and (frames.lt between nights.start and nights.end)"
 		ret = self.query("select "+select+" from frames,positions,passes,nights where "+where, (lt,))
 		if alert:		
-			print "Query took:", round(time.time() - start, 4), "seconds."
+			self.timestamp("\tQuery Done.", start)
 		if ret:
 			return ret[0]
 		else:
@@ -302,7 +319,23 @@ class DB:
 		# Save (commit) the changes
 		self.conn.commit()
 		return ret
-
+	
+	def timestamp(self, label, start, remains = None):
+		def timestr(elapsed, places = 5):
+			if elapsed < 1: #use MS
+				return "%s ms"%(round(elapsed*1000, places))
+			elif elapsed > 60*60: #use hours
+				return "%s hours"%(round(elapsed/(60*60), places))
+			elif elapsed > 60: #use minutes
+				return "%s mins"%(round(elapsed/60, places))
+			else: #use seconds
+				return "%s secs"%(round(elapsed, places))
+		elapsed = time.time()-start
+		leftover=""
+		if remains:
+			leftover = ", Est. %s left"%(timestr(elapsed*remains))
+		print "%s (%s%s)"%(label, timestr(elapsed), leftover)
+		
 	'''
 	Builds the database
 	It begins the complete process of indexing a drive
@@ -313,24 +346,54 @@ class DB:
 		if not self.imgfiles:
 			self.findFiles()
 		self.doFrames(rebuild)
+		self.process()
+		now = ((time.time() - start)/60)
+		self.timestamp("*Hard drive indexing complete!", start)
+		return self #allows for chaining
+
+	'''
+	You can run this if you want to do all of the post processing procedures,
+	but don't need to rebuild the frames table.
+	'''
+	def process(self):
 		self.doPositions()
 		self.redoPositions()
 		self.doPasses()
 		self.doNights()
 		self.doStats()
-		now = ((time.time() - start)/60)
-		print "*Hard drive indexing complete! (", now, "minutes or", round(now/60,2), "hours )"
-		return self #allows for chaining
-
-	def doFrames(self, rebuild = False):
+	
+	#although its not particularly necessary, I think it might be nice to store more information about what files were used.
+	#i need to store the filenames to start off with, so why not just store it in the db...
+	#i'm not sure how i want to utilize this information...
+	#THIS IS UNUSED ATM...
+	'''
+	def doFiles(self, rebuild=False):
+		#TODO:: FINISH THIS
+		# need to fix the other dependencies... doFrames
+		start = time.time()
+		print "Searching for IMG files."
+		if rebuild:
+			self.c.execute("drop table if exists files")
+		self.c.execute("create table if not exists `files` (file TEXT UNIQUE, done BOOL)")
+		#count = self.query("select count(*) as count from files")[0]['count']
+		imgfiles[:] = self.locate('*.img', self.rootdir)
+		for x in imgfiles:
+			self.c.execute("insert or ignore into files(file, done) values(?, ?)", [x])
+		#self.imgfiles.sort()
+		self.timestamp("Found %s IMG files."%(len(self.imgfiles)), start)
+		return self
+	'''
+	#old slow version, possibly more thorough?
+	def doFrames2(self, rebuild = False):
+		##TODO:: Possibly save time by skipping about 56-58 frames, with the assumption that the LT hasn't changed.
+		#This could be a big time saver.
 		start = time.time()
 		print "Building frames data"
 		if rebuild:
 			self.c.execute("drop table if exists frames")
 		self.c.execute("create table if not exists `frames` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
 		lastlt = 0
-		irradpcount = 0.105 # nW / cm2 / um  per  count
-		for img in self.imgfiles:
+		for i,img in enumerate(self.imgfiles):
 			uadata = ud.UAVData(img)
 			print "Data Entries: ", len(uadata)
 			#positions = dict()
@@ -351,26 +414,82 @@ class DB:
 							print "\t...", op.basename(img), "appears to already be indexed."
 							break; #we don't need to do this file...
 					dtfl = np.array(d['Data'], dtype='float32')
-					tmean = dtfl.mean()*irradpcount
-					tstd = dtfl.std()*irradpcount
-					tmin = int(dtfl.min()*irradpcount)
-					tmax = int(dtfl.max()*irradpcount)
-					values = [lt, ms, az, el, os.path.relpath(img, start=self.rootdir), x, tmean, tstd, tmin, tmax]
+					tmean = dtfl.mean()*self.irradpcount
+					tstd = dtfl.std()*self.irradpcount
+					tmin = int(dtfl.min()*self.irradpcount)
+					tmax = int(dtfl.max()*self.irradpcount)
+					values = [lt, ms, az, el, img, x, tmean, tstd, tmin, tmax]
 					#print values
 					self.c.execute("insert or ignore into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
 
 				lastlt = lt
-			print "\tFile done. (", (time.time() - then), " seconds)"
+			self.timestamp("File done.", then, len(self.imgfiles)-1-i)
 			sys.stdout.flush()
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Frames done! (", ((time.time() - start)/60), "minutes )"
+		self.timestamp("Frames done!", start)
+		return self #allows for chaining
+
+	def doFrames(self, rebuild = False):
+		start = time.time()
+		print "Building frames data"
+		if rebuild:
+			self.c.execute("drop table if exists frames")
+		self.c.execute("create table if not exists `frames` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
+		lastlt = 0
+		for i,img in enumerate(self.imgfiles):
+			then = time.time()
+			uadata = ud.UAVData(img)
+			print "Data Entries: ", len(uadata)
+			x=0
+			#Saves time by skipping about 56 frames, with the assumption that the LT hasn't changed.
+			while x < len(uadata): #by using a while loop i can skip some of the indicies...
+				d = uadata.frame(x)
+				az = round(d['TargetAzimuth'], 1)
+				el = round(d['TargetElevation'], 1)
+				lt = d['LTime']
+				ms = d['MSTime']
+				#this should take a frame every second
+				if lastlt != lt:
+					#i need some means of detecting that the file has already been read
+					#only check the first few values, don't bother checking after that...
+					if x < 125 and not rebuild:#this LT is already in the db
+						check = self.get("frames", where={"lt":lt, "ms":ms})
+						if check:
+							print "\t...", op.basename(img), "appears to already be indexed."
+							break; #we don't need to do this file...
+					dtfl = np.array(d['Data'], dtype='float32')
+					tmean = dtfl.mean()*self.irradpcount
+					tstd = dtfl.std()*self.irradpcount
+					tmin = int(dtfl.min()*self.irradpcount)
+					tmax = int(dtfl.max()*self.irradpcount)
+					values = [lt, ms, az, el, img, x, tmean, tstd, tmin, tmax]
+					#print values
+					self.c.execute("insert or ignore into `frames` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+					x += 57 #skip ahead a few shy of 60 frames since the camera is recording 60 fps
+
+				lastlt = lt
+				x+=1
+			self.timestamp("File done.", then, len(self.imgfiles)-1-i)
+			sys.stdout.flush()
+		# Save (commit) the changes
+		self.conn.commit()
+		self.timestamp("Frames done!", start)
 		return self #allows for chaining
 
 
 	def doPositions(self):
 		print "Detecting positions data"
 		start = time.time()
+		
+		#this will ensure that the logged positions fall into one of these azel positions
+		realazel = {}
+		realazel['361'] = (361,)
+		realazel['90'] = (0,)
+		realazel['75'] = (0, 90, 180, 270)
+		realazel['60'] = realazel['75'] + (45, 135, 225, 315)
+		realazel['30'] = realazel['45'] = realazel['60'] + (32.5, 67.5, 112.5, 157.5, 202.5, 247.5, 282.5, 337.5)
+		
 		self.c.execute("drop table if exists positions")
 		self.c.execute("create table if not exists `positions` (az SMALLINT, el SMALLINT, start INT, end INT, count SMALLINT, mean FLOAT, std FLOAT, min FLOAT, max FLOAT)")
 		frames = self.query("SELECT * from frames order by lt")
@@ -379,10 +498,6 @@ class DB:
 		lastlt = 0
 		startlt = 0
 		first = True
-		#tallymean = 0
-		#tallystd = 0
-		#tallymin = 0
-		#tallymax = 0
 		count = 0
 		for x in frames:
 			count += 1
@@ -395,7 +510,7 @@ class DB:
 				lastlt = lt
 				startlt = lt
 				first = False
-			if x['mean'] < 25: #static frames
+			if x['mean'] < 25 or not (float(az) in realazel.get(str(el), [])): #static frames
 				az = 361
 				el = 361
 			#this doesnt work because there are errors in the data, so i'll fix the data later
@@ -412,7 +527,7 @@ class DB:
 		self.c.execute("insert into `positions` (az, el, start, end, count) VALUES(?,?,?,?,?)", values)
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Positions done! (", (time.time() - start), "seconds )"
+		self.timestamp("Positions done!", start)
 		return self
 
 	#passes will exclude some slewing frames, since slewing frames in between passes cannot be easilly accounted for.
@@ -444,7 +559,7 @@ class DB:
 			plt.show()
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Passes done! (", (time.time() - start), "seconds )"
+		self.timestamp("Passes done!", start)
 		return self
 
 	def doNights(self):
@@ -468,17 +583,17 @@ class DB:
 			#print "Found", frames, "elements"
 			firstdata = self.query("SELECT lt from frames where ? < lt and lt <= ? order by lt asc limit 1", (start, end))
 			lastdata = self.query("SELECT lt from frames where ? < lt and lt <= ? order by lt desc limit 1", (start, end))
-			print "Between", dbtime.dbtime(start).strftime(format)[0], "and", dbtime.dbtime(end).strftime(format)[0]
+			print "Between", dbtime.dbtime(start).strftime(format), "and", dbtime.dbtime(end).strftime(format)
 			#print "from", firstdata, "to", lastdata
 			if len(firstdata):
-				print "   First:", dbtime.dbtime(firstdata[0]['lt']).strftime(format)[0], "Last:", dbtime.dbtime(lastdata[0]['lt']).strftime(format)[0]
+				print "   First:", dbtime.dbtime(firstdata[0]['lt']).strftime(format), "Last:", dbtime.dbtime(lastdata[0]['lt']).strftime(format)
 				vals = (firstdata[0]['lt'], lastdata[0]['lt'])
 				self.query("insert into `nights` (start, end) values (?,?)", vals)
 			else:
 				print "   Nothing"
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Nights done! (", (time.time() - time_start), "seconds )"
+		self.timestamp("Nights done!", time_start)
 		return self
 			
 	def doStats(self):
@@ -544,34 +659,31 @@ class DB:
 		prev = 0
 		next = 0
 		#this loop will make the algorithm do a few passes
-		for passnum in range(5):
+		for passnum in range(6):
 			#go through the list of dictionaries
 			for i, e in enumerate(data):
-				if i == len(data)-1:
-					next = i
-				else:
-					next = i+1
-				if i == 0:
-					prev = 0
-				else:
-					prev = i-1
-				ne = data[next]
-				pe = data[prev]
-				if e['count'] < 3 and e['az'] != 361 and e['el'] != 361: #small fragment that is not a slewing frame
+				ne = {}
+				if i != len(data)-1:
+					ne = data[i+1]
+				pe = {}
+				if i != 0:
+					pe = data[i-1]
+				#these shouldnt really happen... too often?
+				if e.get('az') == ne.get('az') and e.get('el') == ne.get('el'): #same azel as right side
+					data = self.merge(data, i, 1, perm)
+				elif e.get('az') == pe.get('az') and e.get('el')== pe.get('el'): #same azel as left side
+					data = self.merge(data, i, -1, perm)
+				if e['count'] < 5: #small fragment that is not a slewing frame
 					# i want the first few passes to just fill up the blanks in the slewing frames
 					if passnum < 2:
-						if pe['az'] == ne['az'] and pe['el'] == ne['el'] and pe['az'] == 361 and pe['el'] == 361:
+						if pe.get('az') == ne.get('az') and pe.get('el') == ne.get('el') and pe.get('az') == 361 and pe.get('el') == 361:
 							data = self.merge(data, i, 0, perm)
 					else:
-						if pe['az'] == ne['az'] and pe['el'] == ne['el']: #azel on either side are equivalent
+						if pe.get('az') == ne.get('az') and pe.get('el') == ne.get('el'): #azel on either side are equivalent
 							data = self.merge(data, i, 0, perm)
-						elif e['az'] == ne['az'] and e['el'] == ne['el']: #same azel as right side
+						elif ne.get('az') == 361 and ne.get('el') == 361: #next position is a slewing frame
 							data = self.merge(data, i, 1, perm)
-						elif e['az'] == pe['az'] and e['el'] == pe['el']: #same azel as left side
-							data = self.merge(data, i, -1, perm)
-						elif ne['az'] == 361 and ne['el'] == 361: #next position is a slewing frame
-							data = self.merge(data, i, 1, perm)
-						elif pe['az'] == 361 and pe['el'] == 361: #prev position is a slewing frame
+						elif pe.get('az') == 361 and pe.get('el') == 361: #prev position is a slewing frame
 							data = self.merge(data, i, -1, perm)
 						else: #dont know what else to do with you, so just make it into slewing frames
 							e['az'] = 361
@@ -594,16 +706,19 @@ class DB:
 	
 		# Save (commit) the changes
 		self.conn.commit()
-		print "Data cleanup done! (", (time.time() - start), "seconds )"
+		self.timestamp("Data cleanup done!", start)
 		return self
 
 	#this will create a bar graph representing the positions data.
 	#this may be useful when looking for errors.
-	def graphPositions(self):
+	def graphPositions(self, slewing = False):
 		fig = plt.figure()
 		ax = fig.add_subplot(111)
 		#this gathers data for the graph
-		data = self.query("select rowid,* from `positions` where az != 361 and el != 361")
+		where = ""
+		if not slewing:
+			where = " where az != 361 and el != 361"
+		data = self.query("select rowid,* from `positions`"+where)
 		x = 0
 		for e in data:
 			y = e['az']+e['el']
@@ -620,66 +735,68 @@ class DB:
 		self.writeDetails()
 		self.writePosImgs()
 		self.writePassCollages()
-		print "*Data products done! (", (time.time() - start), "seconds )"
+		self.timestamp("*Data products done!", start)
 
 
 	def writeDetails(self, fileloc = "detaildata.txt"):
 		start = time.time()
 		print "Writing details data."
-		
 		grab = ['lt', 'el', 'az', 'min', 'max', 'mean', 'std'] #removed ms because its meaningless
-		grab += ['pos_mean', 'pos_std']
-		grab += ['pas_mean', 'pas_std']
-		grab += ['nit_mean', 'nit_std']
+		grab += ['pos_mean', 'pos_std'] + ['pas_mean', 'pas_std'] + ['nit_mean', 'nit_std']
 		grab += ['file', 'ix']
-		lines = [reduce(lambda a,b: a+" "+b,grab)+"\n"]
-		for n in self.get("nights"):
-			udir = self.getNightPath({'lt':n['start']})# op.join(self.rootdir, "dataproducts")
-			tfile = open(op.join(udir, "documents", fileloc), "w")
-			for f in self.get("frames", where={"slewing":0, "between":(n['start'], n['end'])}):
+		spacer = lambda a,b: str(a)+" "+str(b)
+		legend = reduce(spacer,grab)+"\n"
+		nights = self.get("nights")
+		for i,n in enumerate(nights):
+			night_start = time.time()
+			udir = self.getNightPath({'lt':n['start']}, "documents")# op.join(self.rootdir, "dataproducts")
+			tfile = open(op.join(udir, fileloc), "w")
+			tfile.write(legend)#write the legend
+			for f in self.get("frames", "positions", where={"slewing":0, "between":(n['start'], n['end'])}):
 				dat = self.getFrameInfo(f['lt'])
 				vals = [] #need to do it one at t a time if i want it in order...
 				if dat: #if the thing is empty the loop will have problems...
 					for g in grab:
-						val = dat[g]
-						#if type(val) == float:
-						#	val = round(val, 6)
-						vals.append(val)
-				if vals:
-					lines.append(reduce(lambda a,b: str(a)+" "+str(b),vals)+"\n")
-			tfile.writelines(lines)
+						vals.append(dat[g])
+				if vals: #This could be empty. It's a fragmentation due to reassigning slewing frames, and not setting their azel in frames table...
+					tfile.write(reduce(lambda a,b: str(a)+" "+str(b),vals)+"\n")
+			#tfile.writelines(lines)
+			self.timestamp("\tNight complete.", night_start, len(nights)-1-i)
 			tfile.close()
-		print "Details done! (", (time.time() - start), "seconds )"
+		self.timestamp("Details done!", start)
 
 	def writePosImgs(self):
 		start = time.time()
 		print "Writing position images (scaled by night)."
 		#need to loop through the different nights in order to scale it using that nights average...
 		nights = self.get("nights")
-		for n in nights:
+		for i,n in enumerate(nights):
+			p_start = time.time()
 			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(n['start'],n['end'])})
+			print "\tWriting %s frames."%len(frames)
 			opt = {"mean":n['mean'], "std":n['std']}
 			self.writeImg(frames, "regular", opt)
+			self.timestamp("\t%s frames done. (%s/%s)"%(len(frames), i+1, len(nights)), p_start, len(nights)-1-i)
 			#self.writeImg("nostar", opt)
-		print "Position images done! (", (time.time() - start), "seconds )"
+		self.timestamp("Position images done!", start)
 
 	def writePassCollages(self):
 		start = time.time()
 		print "Writing per pass collages (scaled by pass)."
 		passes = self.get("passes")
-		for p in passes:
+		for i,p in enumerate(passes):
+			p_start = time.time()
 			#this will give you the "night" information for this pass, it can then be used for scaling if desired.
-			n = self.get("night", "passes", {"rowid":p['rowid']})
+			#n = self.get("night", "passes", {"rowid":p['rowid']})
 			#this will produce representative (non slewing) frames from every position within this pass.
 			frames = self.get("frames", "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
 			opt = {"mean":p['mean'], "std":p['std']}
 			self.writeCollage(frames, "regular", opt)
-		print "Pass collages done! (", (time.time() - start), "seconds )"
+			self.timestamp("\tCollage %s of %s done."%(i+1, len(passes)), p_start, len(passes)-1-i)
+		self.timestamp("Pass collages done!", start)
 	
 	def getImgPath(self, imgtype, imgfilter, opt={}):
-		fullpath = op.join(self.getNightPath(opt), imgtype, imgfilter)
-		if not op.isdir(fullpath):
-			  os.makedirs(fullpath)
+		fullpath = self.getNightPath(opt, op.join(imgtype, imgfilter))
 		return op.join(fullpath, self.getFilename(opt))
 
 	def getFilename(self, opt={}):
@@ -693,7 +810,7 @@ class DB:
 		#all else fails, make the name "default"
 		return opt['name'] + ".png"
 
-	def getNightPath(self, opt={}):
+	def getNightPath(self, opt={}, extra=None):
 		night = "unknown"
 		if opt.get('lt'):
 			nit = dbtime.dbtime(opt['lt'])
@@ -703,8 +820,10 @@ class DB:
 		if opt.has_key("fulldir"):
 			return op.join(opt['fulldir'], opt['name'])
 		else:
-			datadir = opt.get("rootdir", op.join(self.rootdir, "dataproducts"))
+			datadir = opt.get("rootdir", op.join(self.rootdir, "dbProducts"))
 			nightdir = op.join(datadir, night)
+			if extra:
+				nightdir = op.join(nightdir, extra)
 			#typedir = op.join(nightdir, imgtype)
 			#filterdir = op.join(typedir, imgfilter)
 			if not op.isdir(nightdir):
@@ -725,12 +844,11 @@ class DB:
 		#if op.isfile(path):
 		#	return Image.open(path)
 		#open the file
-		uadata = ud.UAVData(op.join(self.rootdir, entry['file']))
+		uadata = ud.UAVData(entry['file'])
 		fm = uadata.frame(entry['ix'])
 		#make it into a numpy array
 		dtfl = np.array(fm['Data'], dtype='float32')
-		irradpcount = 0.105 # nW / cm2 / um  per  count
-		dtfl *= irradpcount
+		dtfl *= self.irradpcount
 		dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
 
 		if not opt.has_key('mean') in opt or not opt.has_key('std'): #if some scale factor isnt supplied, use whatever works for this image
@@ -804,17 +922,16 @@ class DB:
 			path = self.getImgPath("images", imgfilter, this_opt)
 			#print path
 			img.save(path)
-		print "\t",len(entries),imgfilter,"images done. (", (time.time() - start), "seconds )"
+		#self.timestamp("\t%s %s images done."%(len(entries),imgfilter), start)
 		return self #allows for chaining
 	
 	def writeCollage(self, entries, imgfilter = "regular", opt = {}):
-		start = time.time()
 		if type(entries) != list:
 			raise RuntimeError("writeCollage: \"entires\" must be a list of db entries.")
 		this_opt = opt.copy()
 		this_opt['lt'] = opt.get('lt', entries[0]['lt'])
-		path = self.filepath("collages", imgfilter, this_opt)
-		
+		path = self.getImgPath("collages", imgfilter, this_opt)
+
 		#somewhat cheap hack for now:
 		dimentions = (2940,2940)
 		bigimg = Image.new('RGB', dimentions)
@@ -841,33 +958,11 @@ class DB:
 			#imcl.show()
 			#this code will get the distance from the origin...
 			# the "- x/2" part is adjusting for the center of imcl,
-			nx = origin[0] + math.cos(info['az']*math.pi/180)*distance - w/2
-			ny = origin[1] + math.sin(info['az']*math.pi/180)*distance - h/2
-			bigimg.paste(imcl, (nx,ny), imcl)
+			nx = int(origin[0] + math.cos(info['az']*math.pi/180)*distance - w/2)
+			ny = int(origin[1] + math.sin(info['az']*math.pi/180)*distance - h/2)
+			bigimg.paste(imcl, (nx,ny), imcl) #it expects integers...
 			
-			'''
-			#print('appazel2 imcl')
-			#sys.stdout.flush()
-			el = p['el']
-			if el == 0:
-				el = 15
-			imadj = appazel2(p['az'], el, imcl, totdegrs)
-			#print('convert imcl to L')
-			#sys.stdout.flush()
-			immsk = imadj.convert('L')
-			#print('calc mask values')
-			#sys.stdout.flush()
-			immsk.putdata(map(lambda x: 255 if x > 0 else 0, immsk.getdata()))
-			#print('paste into bigim')
-			#sys.stdout.flush()
-			#bigim.putdata(map(lambda a, b: (a[0] + b[0], a[1] + b[1], a[2] + b[2]), bigim.getdata(), imadj.getdata()))
-			bigim.paste(imadj, (0, 0), immsk)
-			#print('pasted ({0}, {1})'.format(round(p['az'], 1), round(p['el'], 1)))
-			sys.stdout.flush()
-			#bigim = Image.composite(bigim, imadj)
-			'''
 		#bigimg.show()
-		#self.writeImg(bigim, opt={"name":"collage"})
 		if opt.has_key('mean') and opt.has_key('std'):
 			thresh = opt.get('thresh', 5)
 			buff = opt['std']*thresh
@@ -892,7 +987,6 @@ class DB:
 		sys.stdout.flush()
 
 		bigimg.save(path)
-		print "\tCollage done. (", (time.time() - start), "seconds )"
 
 	def makeGradient(self, width=20, height=400, tmean=4, tstd=.5, tmin=0, tmax=10):
 		use = np.array(range(255,0,-1), dtype='uint8')
