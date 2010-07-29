@@ -673,7 +673,7 @@ class DB:
                 lastlt = lt
                 startlt = lt
                 first = False
-            if x['mean'] < 25:# or not (az in realazel.get(str(el), [])): #static frames
+            if x['mean'] < 25 or az < 0 or el < 0:# or not (az in realazel.get(str(el), [])): #static frames
                 az = 361
                 el = 361
             #this doesnt work because there are errors in the data, so i'll fix the data later
@@ -821,19 +821,67 @@ class DB:
                 self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
             del data[use]
         return data
-
-
+    
     def redoPositions(self, perm = True):
-        #TODO::TEST THIS NEW SYSTEM... IT NEEDS WORK
+        #TODO: drop the invalid frames...
+        def listGet(l, i):
+            if i in l:
+                return l.index(i)
+            return None
+        
+        def getAzel(e):
+            if e:
+                return (e.get('el'),e.get('az'))
+            else:
+                return empty
+        
+        def setAzel(e, azel):
+            if getAzel(e) != azel:
+                e['el'] = azel[0]
+                e['az'] = azel[1]
+                #then commit to db
+                if perm:
+                    self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+            
+        
+        def doCheck(data, i, expected, r = 5):
+            if i != None:
+                for check in range(1,r):
+                    ni = i+check
+                    if ni <= len(data)-1 and getAzel(data[ni]) == expected:
+                        return ni
+            return None
+        
+        def getData(i):
+            if i < 0 or i >= len(data):
+                return {}
+            else:
+                return data[i]
+
+        def getChain(e, offset):
+            if e == empty:
+                return chain[1]
+            i = chain.index(e)
+            if i+offset < 0:
+                return empty
+            return chain[(i+offset)%len(chain)]
+        
         print "Cleaning up positions data"
         start = time.time()
-
         realazel = {}
         realazel[361] = (361,)
         realazel[90] = (0,)
         realazel[75] = (0, 90, 180, 270)
         realazel[60] = realazel[75] + (45, 135, 225, 315)
         realazel[30] = realazel[45] = realazel[60] + (22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5)
+        
+        chain = [(361,361)] #position zero is special.
+        chain += [(90, 0)]
+        chain += [(75, 270),(75, 180),(75, 90),(75, 0)]
+        chain += [(60, 90),(60, 45),(60, 0),(60, 315),(60, 270),(60, 135),(60, 180),(60, 225)]
+        chain += [(45, 270),(45, 247.5),(45, 225),(45, 202.5),(45, 180),(45, 157.5),(45, 135),(45, 112.5),(45, 90),(45, 292.5),(45, 315),(45, 337.5),(45, 0),(45, 22.5),(45, 45),(45, 67.5)]
+        chain += [(30, 90),(30, 67.5),(30, 45),(30, 22.5),(30, 0),(30, 337.5),(30, 315),(30, 292.5),(30, 270),(30, 112.5),(30, 135),(30, 157.5),(30, 180),(30, 202.5),(30, 225),(30, 247.5)]
+                
         
         self.c.execute("select rowid,az,el,count,start,end from `positions` ")
         data = self.sqlDict()
@@ -848,18 +896,24 @@ class DB:
                     original.append(x['az']+x['el'])
                 #original.append(0)
     
-        prev = 0
-        next = 0
+        thresh = 3
+        
         #this loop will make the algorithm do a few passes
         for passnum in range(6):
             #go through the list of dictionaries
             for i, e in enumerate(data):
                 ne = {}
-                if i != len(data)-1:
+                nne = {}
+                if i < len(data)-1:
                     ne = data[i+1]
+                if i+1 < len(data)-1:
+                    nne = data[i+2]
                 pe = {}
-                if i != 0:
+                ppe = {}
+                if i > 0:
                     pe = data[i-1]
+                if i-1 > 0:
+                    ppe = data[i-2]
                 #these shouldnt really happen... too often?
                 if e.get('az') == ne.get('az') and e.get('el') == ne.get('el'): #same azel as right side
                     data = self.merge(data, i, 1, perm)
@@ -869,35 +923,237 @@ class DB:
 
                 #fragment too small to be a real position or azel is incorrect
                 #i don't have a reliable means of dealing with chunks with invalid azels, so im basically just throwing them out...
-                thresh = 8
-                # i want the first few passes to just fill up the blanks in the slewinglowes
-                if passnum < 2:
-                    if e['count'] < thresh and pe.get('az') == ne.get('az') and pe.get('el') == ne.get('el') and pe.get('az') == 361 and pe.get('el') == 361:
-                        data = self.merge(data, i, 0, perm)
-                elif e['count'] < thresh or not e['az'] in realazel.get(e['el'], []):
-                    if ne.get('el') == pe.get('el'):
-                        if pe.get('el') == 361 and e['count'] < thresh or pe.get('el') != 361:
-                            if ne.get('az') == pe.get('az'):
-                                data = self.merge(data, i, 0, perm)
-                            elif not ne['az'] in realazel.get(ne['el'], []) and e['el'] != 361:
-                                data = self.merge(data, i, 0, perm, "left")
-                            elif not pe['az'] in realazel.get(pe['el'], []) and e['el'] != 361:
-                                data = self.merge(data, i, 0, perm, "right")
-                    #if pe.get('az') == ne.get('az') and pe.get('el') == ne.get('el'): #azel on either side are equivalent                        
-##                        elif e['count'] > 5 and ne.get('az') != 361 and ne.get('el') != 361: #next position is a slewing frame
-##                            data = self.merge(data, i, 1, perm)
-##                        elif e['count'] > 5 and pe.get('az') != 361 and pe.get('el') != 361: #prev position is a slewing frame
-##                            data = self.merge(data, i, -1, perm)
-                    elif ne.get('az') == 361 and ne.get('el') == 361: #next position is a slewing frame
+                if e['count'] < thresh:
+                    if ne.get('el') == pe.get('el') and ne.get('az') == pe.get('az'):
+                        # i want the first few passes to just fill up the blanks in the slewinglowes
+                        if (passnum > 1 or pe.get('el') == 361):
+                            data = self.merge(data, i, 0, perm)
+                    elif passnum > 2 and ne.get('az') == 361 and ne.get('el') == 361: #next position is a slewing frame
                         data = self.merge(data, i, 1, perm)
-                    elif pe.get('az') == 361 and pe.get('el') == 361: #prev position is a slewing frame
+                    elif passnum > 2 and pe.get('az') == 361 and pe.get('el') == 361: #prev position is a slewing frame
                         data = self.merge(data, i, -1, perm)
                     elif passnum > 4: #dont know what else to do with you, so just make it into slewing frames
                         e['az'] = 361
                         e['el'] = 361
                     if perm:
                         self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+                
+##                #this will attempt to guess what the value should be based on the past or upcoming values...
+##                azel = getAzel(e)
+##                if passnum > 4 and not azel in chain:
+##                    nnazel = getAzel(nne)
+##                    ppazel = getAzel(ppe)
+##                    
+##                    use = {}
+##                    if nnazel in chain and ppazel in chain:
+##                        if ppazel == nnazel:
+##                            if ppazel == chain[0]:#slewing frames
+##                                use = ppazel #just make it a slewing frame
+##                        else:
+##                            if ppe.get('count') > nne.get('count'):
+##                                use = chain[chain.index(ppazel)+1]
+##                            else:
+##                                use = chain[chain.index(nnazel)-1]
+##                        setAzel(e, use)
+##                        elif nnazel in chain:
+##                            use = chain[chain.index(nnazel)-1]
+##                        elif ppazel in chain:
+##                            use = chain[chain.index(ppazel)+1]
+##                        
+##                        #if perm:
+##                        #    self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+##                    elif nnazel != empty and ppazel != empty:
+##                        print "Unable to fix inconsistency... ", nnazel, (e['el'], e['az']), ppazel
 
+        if graph:
+            show = list()
+            for x in data:
+                for z in range(x['count']):
+                    show.append(x['az']+x['el'])
+                #show.append(0)    
+            #draw the graph
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.plot(show, linewidth=2)
+            ax.plot(original, linewidth=1)
+            plt.show()
+    
+        # Save (commit) the changes
+        self.conn.commit()
+        self.timestamp("Data cleanup done!", start)
+        return self   
+    
+    #bleh this is just too hard. The data is too mangledm the logic is too twisted, i'm going back to the old way.
+    def redoPositions2(self, perm = True):
+        def merge(i, direction, bias = "right"):
+            use = 0
+            if direction == 0: #do both sides
+                if bias == "right":
+                    use = i+1
+                else:
+                    use = i-1
+            else:
+                use = i+(abs(direction)/direction) #i+1 or i-1
+            data[i]['az'] = data[use]['az']
+            data[i]['el'] = data[use]['el']
+            if (direction <= 0):
+                data[i]['start'] = data[i-1]['start']
+                data[i]['count'] += data[i-1]['count']
+            if (direction >= 0):
+                data[i]['end'] = data[i+1]['end']
+                data[i]['count'] += data[i+1]['count']
+            if direction == 0:
+                if perm:
+                    self.c.execute("delete from `positions` where rowid=? or rowid=?",(data[i-1]['rowid'],data[i+1]['rowid']))
+                del data[i+1], data[i-1]
+            else:
+                if perm:
+                    self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
+                del data[use]
+        #TODO::TEST THIS NEW SYSTEM... IT NEEDS WORK
+        print "Cleaning up positions data"
+        start = time.time()
+
+        empty = (None, None)
+        slewing = (361, 361)
+        
+        #these are all of the positions in the order that the camera takes them
+        chain = [(361,361)] #position zero is special.
+        chain += [(90, 0)]
+        chain += [(75, 270),(75, 180),(75, 90),(75, 0)]
+        chain += [(60, 90),(60, 45),(60, 0),(60, 315),(60, 270),(60, 135),(60, 180),(60, 225)]
+        chain += [(45, 270),(45, 247.5),(45, 225),(45, 202.5),(45, 180),(45, 157.5),(45, 135),(45, 112.5),(45, 90),(45, 292.5),(45, 315),(45, 337.5),(45, 0),(45, 22.5),(45, 45),(45, 67.5)]
+        chain += [(30, 90),(30, 67.5),(30, 45),(30, 22.5),(30, 0),(30, 337.5),(30, 315),(30, 292.5),(30, 270),(30, 112.5),(30, 135),(30, 157.5),(30, 180),(30, 202.5),(30, 225),(30, 247.5)]
+        
+        #print chain
+        
+        self.c.execute("select rowid,az,el,count,start,end from `positions` ")
+        data = self.sqlDict()
+        graph = self.debug
+        if not perm:
+            graph=True
+        if graph:
+            #use this later to graph the original data
+            original = list()
+            for x in data:
+                for z in range(x['count']):
+                    original.append(x['az']+x['el'])
+                #original.append(0)
+    
+        thresh = 5
+        
+        ppazel = empty
+        pazel = empty
+        nazel = empty
+        def listGet(l, i):
+            if i in l:
+                return l.index(i)
+            return None
+        
+        def getAzel(e):
+            if e:
+                return (e.get('el'),e.get('az'))
+            else:
+                return empty
+        
+        def setAzel(e, azel):
+            if getAzel(e) != azel:
+                e['el'] = azel[0]
+                e['az'] = azel[1]
+                #then commit to db
+                if perm:
+                    self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
+            
+        
+        def doCheck(data, i, expected, r = 5):
+            if i != None:
+                for check in range(1,r):
+                    ni = i+check
+                    if ni <= len(data)-1 and getAzel(data[ni]) == expected:
+                        return ni
+            return None
+        
+        def getData(i):
+            if i < 0 or i >= len(data):
+                return {}
+            else:
+                return data[i]
+
+        def getChain(e, offset):
+            if e == empty:
+                return chain[1]
+            i = chain.index(e)
+            if i+offset < 0:
+                return empty
+            return chain[(i+offset)%len(chain)]
+        
+        #for i, e in enumerate(data):
+        i=0
+        while i < len(data):
+            e = data[i]
+            azel = getAzel(e)
+            pe = getData(i-1)
+            ppe = getData(i-2)
+            ne = getData(i+1)
+            pazel = getAzel(pe)
+            ppazel = getAzel(ppe)
+            nazel = getAzel(ne)
+            #print listGet(chain, azel), azel
+                
+            if pazel == slewing:
+                expected = getChain(ppazel, 1)
+                next = slewing
+            else:
+                expected = slewing
+                next = getChain(pazel, 1)
+                #getChain(ppazel, 1)
+            
+            same = doCheck(data, i, pazel) #check for more of the same
+            findslewing = doCheck(data, i, slewing) #it is followed by a slewing fame...
+            findnext = doCheck(data, i, nazel)
+            print listGet(chain,ppazel), listGet(chain,pazel), listGet(chain,azel), "expecting:", chain.index(expected), "we have:", listGet(chain,azel), "len:", e['count']
+
+            if nazel == pazel:
+                if azel != expected or e['count'] <= ne['count']:
+                    #azel = pazel
+                    merge(i, 0)
+                    setAzel(e, pazel)
+                #else:
+                    
+##                if pazel != slewing or e['count'] < thresh:
+##                    azel = pazel
+            elif nazel == next and azel != expected:
+                #azel = slewing
+                setAzel(e, slewing)
+            elif azel != expected:
+                if nazel == next:
+                    #azel = slewing
+                    setAzel(e, slewing)
+                else:
+                    #azel = pazel
+                    setAzel(e, pazel)
+            elif azel == slewing and nazel != next:
+                setAzel(e, pazel)
+                #azel = pazel
+                
+##            if azel != expected:# or azel == slewing:
+##                #print listGet(chain,ppazel), listGet(chain,pazel), listGet(chain,azel)
+##                
+##                if azel != pazel and azel != nazel: #these should be fine...
+##                    if same and not pazel == slewing and hasslewing < hasnext: #There is more of the same position coming up, and there is still 
+##                        azel = pazel
+##                    elif hasnext or not azel in chain: #we can find the next value in this chain or the value is invalid so just assign it to best guess...
+##                        azel = expected
+            
+
+            #setAzel(e, azel)
+                #print "new value:", chain.index(azel)
+            #ppazel = pazel
+            #pazel = azel
+            i+=1
+            
+                
+        
         if graph:
             show = list()
             for x in data:
@@ -925,14 +1181,35 @@ class DB:
         where = ""
         if not slewing:
             where = " where az != 361 and el != 361"
-        data = self.query("select rowid,* from `positions`"+where)
+        data = self.query("select rowid,* from `positions`"+where+" limit 1000")
         x = 0
         for e in data:
-            y = e['el']#e['az']+
-            ax.bar(x, y, e['count'])
+            ax.bar(x+1, e['el'], e['count']-2, edgecolor="#00FF00", fill=False)
+            ax.bar(x, e['az'], e['count'], edgecolor="#FF0000", fill=False)
             x += e['count']
         #draw the graph
         plt.show()
+        return self #allows for chaining
+    
+    def graphPassIrad(self):
+        nights = self.get("nights")
+        fig = plt.figure()
+        for n in nights:
+            ax = fig.add_subplot(111)
+            x=0
+            xvals = []
+            yvals = []
+            for p in self.get("passes", "nights", {"rowid":n['rowid']}):
+                count = p['end']-p['start']
+                passtime = dbtime.dbtime(p['start'])
+                xvals.append(x)
+                yvals.append(p['mean'])
+                x += count
+            ax.plot(xvals, yvals)
+        fig.savefig("graph.png")
+        plt.show()
+        #draw the graph
+        
         return self #allows for chaining
 
     ##Start of data products##
@@ -971,40 +1248,49 @@ class DB:
             tfile.close()
         self.timestamp("Details done!", start)
 
-    def makePosImgs(self):
+    #available options
+    #table
+    #ptable
+    def makeImages(self, opt={}):
         start = time.time()
-        print "Writing position images (scaled by night)."
+        print "Writing position images (scaled by %s)."%scaleby
         #need to loop through the different nights in order to scale it using that nights average...
-        nights = self.get("nights")
-        for i,n in enumerate(nights):
+        table = opt.get('table', 'glow')
+        ptable = opt.get('ptable', 'pass')
+        imgfilter = opt.get('filter', 'regular')
+        scale = [{}]
+        if scaleby:
+            scale = self.get(scaleby) #this will break up the frames by pass, or night
+        for i,s in enumerate(scale):
             p_start = time.time()
-            frames = self.get("glow", "positions", {'rep':1, 'slewing':0, 'between':(n['start'],n['end'])})
+            frames = self.get(table, "positions", {'rep':1, 'slewing':0, 'between':(s['start'],s['end'])})
             print "\tWriting %s frames."%len(frames)
-            opt = {"parent":n}
-            #opt['graph']=1
-            self.writeImg("glow", frames, "regular", opt)
-            #self.writeImg("glow", frames, "histo", opt)
-            self.timestamp("\t%s frames done. (%s/%s)"%(len(frames), i+1, len(nights)), p_start, len(nights)-1-i)
-            #self.writeImg("nostar", opt)
+            imgs = (table, frames)
+            parent = (scaleby, s)
+            imgfilter = "regular"
+            for f in frames:
+                tabletype = table+"-images"
+                fileloc = op.join(self.getNightPath(f['lt'], table+"-images", imgfilter+"-"+scaleby), self.getFilename(f['lt']))
+                self.getImg(f, imgfilter, s, opt).save(fileloc)
+            self.timestamp("\t%s frames done. (%s/%s)"%(len(frames), i+1, len(scale)), p_start, len(scale)-1-i)
         self.timestamp("Position images done!", start)
 
-    def makePassCollages(self):
+    def makeCollages(self, table = "glow", scaleby = "pass", opt={}):
         start = time.time()
-        print "Writing per pass collages (scaled by pass)."
+        print "Writing per pass collages (scaled by %s)."%scaleby
         passes = self.get("passes")
-        table = "glow"
         for i,p in enumerate(passes):
             p_start = time.time()
-            #this will give you the "night" information for this pass, it can then be used for scaling if desired.
-            #n = self.get("night", "passes", {"rowid":p['rowid']})
+            s = p
+            if scaleby:
+                s = self.get(scaleby, "passes", {"rowid":p['rowid']})
             #this will produce representative (non slewing) frames from every position within this pass.
-            frames = self.get("glow", "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
-            #it is also possible to change the "sigma" which is multiplied by std in order to scale the image.
-            #smaller value will end up with a higher contrast image... Larger value washes the image out.
-            opt = {"parent": p} #{'sigma':3} 
-            #for x in ['mean', 'std', 'min', 'max']: #include min and max for the legend... (isn't used for scaling)
-            #    opt[x] = p[x]
-            self.writeCollage(table, frames, "regular", opt)
+            frames = self.get(table, "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
+            fileloc = op.join(self.getNightPath(f['lt'], table+"-collages", imgfilter+"-"+scaleby), self.getFilename(f['lt']))
+            opt['check'] = opt.get('check', fileloc)
+            for x in frames:
+                
+            self.getCollage(frames, s, "regular", {"check":opt}).save(fileloc)
             self.timestamp("\tCollage %s of %s done."%(i+1, len(passes)), p_start, len(passes)-1-i)
         self.timestamp("Pass collages done!", start)
     
@@ -1035,7 +1321,8 @@ class DB:
     #table - this will be used to distinguish between cloud data and skyglow data...
     #imgtype - "image", "collage", ...
     #imgfilter - "regular", "nostar", ...
-    def getImgPath(self, table, entry, imgtype, imgfilter, opt={}):
+    getImg(f, imgfilter, s, opt)
+    def getImgLoc(self, lt, imgfilter, opt={}):
         if opt.get('fullpath'):
             return opt.get('fullpath')
         elif opt.get('fulldir'):
@@ -1052,53 +1339,40 @@ class DB:
 
     #options
     #name - override the regerated name with this
-    def getFilename(self, entry, opt={}):
-        if opt.has_key('name'):
-            return opt.get('name')
-        #this is going to build the filename if one isn't provided
-        
-        if entry.get('lt'):
-            name = time.strftime("%Y%m%d-%H%M%S", time.localtime(entry['lt']))
+    def getFilename(self, lt, *args):
+        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(lt))
             #if opt.get('ms'):
             #    opt['name'] += '-'+str(opt['ms'])
-        else:
-            name = "default"#all else fails, make the name "default"
-        name += '-s'+str(opt.get('sigma', self.default_sigma))        
+        for a in args:
+            name += '-'+a#str(opt.get('sigma', self.default_sigma))        
         return name + ".png"
 
-    def getNightPath(self, entry, opt={}):
-        night = "unknown"
-        if entry.get('lt'):
-            nit = dbtime.dbtime(entry['lt'])
-            nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
-            night = nit.strftime("%Y%m%d")
-            
-        if opt.has_key("fulldir"):
-            return opt['fulldir']
-        else:
-            datadir = op.join(opt.get("rootdir", self.rootdir), "dbProducts")
-            nightdir = op.join(datadir, night)
-            
-            #typedir = op.join(nightdir, imgtype)
-            #filterdir = op.join(typedir, imgfilter)
-            if not op.isdir(nightdir):
-              os.makedirs(nightdir)
-            return nightdir;#op.join(filterdir, opt['name'])
+    def getNightPath(self, lt, *args):
+        nit = dbtime.dbtime(lt)
+        nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
+        nightdir = op.join(self.rootdir, "dbProducts", nit.strftime("%Y%m%d"))
+        for a in args:
+            nightdir = op.join(nightdir, a)
+        if not op.isdir(nightdir):
+          os.makedirs(nightdir)
+        return nightdir;#op.join(filterdir, opt['name'])
 
     '''
     Given a db "glow" entry, this returns the image data as a PIL.Image.Image...
     This is also where filters are applied.
     '''
-    def getImg(self, entry, imgfilter = "regular", opt={}):
+    def getImg(self, entry, imgfilter = "regular", parent = {}, opt={}):
         #TODO:: Work on a more sophisticated means of scaling the image data...
         filters = {"histo":self.imgHisto, "regular":self.imgRegular, "nostar":self.imgNostar}
         if not imgfilter.lower() in filters:
-            raise RuntimeError('writeimage: Invalid image type. Valid entries:', filters.keys())
+            raise RuntimeError('getImg: Invalid image type. Valid entries:', filters.keys())
 
         #path = self.filepath(entry, imgfilter, opt)
         #The scaling options might be different, so this might not be a good idea...
-        #if op.isfile(path):
-        #    return Image.open(path)
+        check = opt.get('check')
+        if check and op.isfile(check):
+            return Image.open(path)
+        
         #open the file
         uadata = ud.UAVData(entry['file'])
         fm = uadata.frame(entry['ix'])
@@ -1109,21 +1383,16 @@ class DB:
 
         opt = opt.copy() #don't change the original
         #determine scaling options
+        if not parent:
+            parent = entry
 
         #this is the basic scaling option...
         if not opt.has_key('min') and not opt.has_key('max'):
             opt['sigma'] = opt.get('sigma', self.default_sigma)
-            if opt.has_key('parent'):
-                parent = opt['parent']
-                #the old method:
-                #opt['min'] = parent['mean']-parent['std']*opt['sigma']
-                #opt['max'] = parent['mean']+parent['std']*opt['sigma']
-                #new method:
-                opt['min'] = parent['min_mean']-parent['std']*opt['sigma']
-                opt['max'] = parent['max_mean']+parent['std']*opt['sigma']
-            else:
-                opt['min'] = dtfl.mean()-dtfl.std()*opt['sigma']
-                opt['max'] = dtfl.mean()+dtfl.std()*opt['sigma']
+            opt['min'] = parent['min_mean']-parent['std']*opt['sigma']
+            opt['max'] = parent['max_mean']+parent['std']*opt['sigma']
+            #    opt['min'] = dtfl.mean()-dtfl.std()*opt['sigma']
+            #    opt['max'] = dtfl.mean()+dtfl.std()*opt['sigma']
         if opt['min'] < 0:
             opt['min'] = 0
         
@@ -1150,57 +1419,76 @@ class DB:
         use = self.imgScale(use, opt['min'], opt['max'])
         return Image.fromarray(np.array(use, dtype='uint8'))
 
-    #Purpose: pull image data from IMG files, write out images as png after applying a filter.
-    # entry = img data from sql
-    #  - may be in sqlDict() form: [{'file':"file/loc.img", 'ix':123}, {'file':"file/loc.img", 'ix':321}, ...]
-    #  - or it may be a single dictionary in the form: {'file':"file/loc", 'ix':123}
-    #  - "file", and "ix" are required fields
-    # imgfilter defines which filter to use (useful for different scaling methods)
-    #  - can be either "regular" or "nostar" (possibly more to come)
-    # opt is a generic dictionary that contains information that is to be used for scaling, and saving the file.
-    #        ex: opt = dict('mean':None, 'std':None, 'thresh':5, 'dir':None, 'name':None ...)
-    # Scaling options
-    #        These options are used for "regular" scaling:
-    #        mean - The mean of the image data, this may be an average mean.
-    #        std - Standard deviation of the image, this may be an average std.
-    #            If not specified, mean and std will be automatically determined.
-    #        sigma - This is the multiplier that determines how many times standard deviation the image data should be cropped at.
-    #            Default: 5
-    # Naming options
-    #        rootdir - the directory where the file tree should go. Default is '...rootdir/dataproducts'
-    #        fulldir - if set, this will be the exact directory where the image will be placed.
-    #        name - This is the filename you want to use. 
-    #                    If not specified it tries to produce one, if it can't it will produce "default.png"
-    def writeImg(self, table, entries, imgfilter="regular", opt={}):
-        opt = opt.copy()
-        start = time.time()
-        use = entries
+    def getCollage(self, entries, imgfilter = "regular", parent={}, opt = {}):
         if type(entries) != list:
-            use = [entries]
-        img = None
-        paths = []
-        for entry in use:
-            #this_opt = opt.copy()
-            img = self.getImg(entry, imgfilter, opt)
-            
-##            if type(entry) == dict and entry.has_key("file"):#if just given one entry put it in a list...
-##                
-##                this_opt['lt'] = opt.get("lt", entry.get("lt", None))
-##                this_opt['ms'] = opt.get("ms", entry.get("ms", None))
-##            elif isinstance(entry,Image.Image):
-##                img = entry
-##                this_opt['lt'] = opt.get("lt", None)
-##                this_opt['ms'] = opt.get("ms", None)        
-##            else:
-##                raise RuntimeError("writeImg: Invalid entry field.")    
-            
-            #this is going to build the file path if one isn't provided
-            path = self.getImgPath(table, entry, "images", imgfilter, opt)
-            img.save(path)
-            paths.append(path)
-        #self.timestamp("\t%s %s images done."%(len(entries),imgfilter), start)
-        return paths #allows for chaining
+            raise RuntimeError("getCollage: \"entires\" must be a list of db entries.")
+        opt = opt.copy()
+       
+        #somewhat cheap hack for now:
+        dimentions = (2940,2940)
+        
+        #monofontbg = ImageFont.load_default()
+        imgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 14)
+        gradFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 20)
+        bigimgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 42)
+                
+        bigimg = Image.new('RGB', dimentions)
+        origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image        
+        for e in entries:#pas:
+            img = self.getImg(e, imgfilter, parent, opt)
+            imcl = img.convert('RGBA')
+            #f = ImageFont.load_default()
+
+            d = ImageDraw.Draw(imcl)
+            d.text( (0, 0), u'{0} ({1}, {2})'.format(round(e['mean'], 2), round(e['az'], 1), round(e['el'], 1)), font=imgFont, fill='#00ff00')
     
+            #rotation = 0
+            #if p['el'] != 90:
+                #rotation = -(p['az']-90)
+            info = self.get("positions", "glow", {"lt":e['lt']})[0]
+            rotation = -(info['az']-90)
+            imcl = imcl.rotate(rotation, expand = 1)
+
+            w,h = imcl.size
+            #distance from the origin is related to the elevation
+            distance = (90-info['el'])*22
+            #this code will get the distance from the origin...
+            # the "- x/2" part is adjusting for the center of imcl,
+            nx = int(origin[0] + math.cos(info['az']*math.pi/180)*distance - w/2)
+            ny = int(origin[1] + math.sin(info['az']*math.pi/180)*distance - h/2)
+            bigimg.paste(imcl, (nx,ny), imcl) #it expects integers...
+        
+        d = ImageDraw.Draw(bigimg)
+        
+        start = dbtime.dbtime(entries[0]['lt'])
+        end = dbtime.dbtime(e['lt'])
+        timestr = start.strftime("%Y-%m-%d")+" ("+start.strftime("%H:%M:%S")+" - "+end.strftime("%H:%M:%S")+")"
+         #get an aproximate size
+        legend = [timestr]
+        if parent: #give the parent's statistics
+            for x in ['mean', 'std', 'min', 'max']:
+                val = round(parent[x], 3)
+                if val == 0:
+                    val = "N/A"
+                legend += ["%s: %s"%(x, val)]
+            
+        fontH = bigimgFont.getsize("0")[1]    
+        for i,e in enumerate(legend):
+            d.text((140, 10+((fontH+10)*i)), e, font=bigimgFont, fill='#00ff00')
+        #d.text((120, 40), "Mean: %s"%(opt['mean']), font=bigimgFont, fill='#00ff00')
+        
+        #display the gradient if there a uniform scale applied...
+        if parent:
+            sigma = opt.get('sigma', self.default_sigma)
+            buff = parent['std']*sigma
+            tmax = parent['max_mean']+buff
+            tmin = parent['min_mean']-buff
+            grad = self.makeGradient(40, 600, parent['mean'], parent['std'], tmin, tmax, font=gradFont)
+            bigimg.paste(grad, (10,10))
+        #bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
+        #sys.stdout.flush()
+        return bigimg
+
     def writeCollage(self, table, entries, imgfilter = "regular", opt = {}):
         if type(entries) != list:
             raise RuntimeError("writeCollage: \"entires\" must be a list of db entries.")
