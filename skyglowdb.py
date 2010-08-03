@@ -13,8 +13,8 @@
 '''
 #Useful for getting set up in terminal:
 import skyglowdb
-reload(skyglowdb); db = skyglowdb.DB("/home/drew/prj/data/", True)
-reload(skyglowdb); bdb = skyglowdb.DB("/media/lavag", True)
+reload(skyglowdb); db = skyglowdb.DB("/home/drew/prj/data/")
+reload(skyglowdb); bdb = skyglowdb.DB("/media/lavag")
 
 A test of the slewing frame cleanup, and command chaining:
 db.restore().fixPositions(graph=1).graphPositions()
@@ -52,17 +52,33 @@ from PIL import Image, ImageFont, ImageDraw#, ImageOps, ImageEnhance
 import fnmatch, os
 
 class DB:
-    rootdir = ""    
+    rootdir = ""
+
+    #db connection
     con = None
     c = None
+    
+    #open file
+    ualoc = None
+    uadata = None
 
     #use this as a constant...
     irradpcount = 0.105 # nW / cm2 / um  per  count
     fpserror = 5
     default_sigma = 3
+    
+    #used as a flag indicating the verbose "debug mode"
     debug = None
     
     tables = {} #set up some table information so i can automate the table creation
+    
+    azel_chain = [(361,361)] #position zero is special.
+    azel_chain += [(90, 0)]
+    azel_chain += [(75, 270),(75, 180),(75, 90),(75, 0)]
+    azel_chain += [(60, 90),(60, 45),(60, 0),(60, 315),(60, 270),(60, 135),(60, 180),(60, 225)]
+    azel_chain += [(45, 270),(45, 247.5),(45, 225),(45, 202.5),(45, 180),(45, 157.5),(45, 135),(45, 112.5),(45, 90),(45, 292.5),(45, 315),(45, 337.5),(45, 0),(45, 22.5),(45, 45),(45, 67.5)]
+    azel_chain += [(30, 90),(30, 67.5),(30, 45),(30, 22.5),(30, 0),(30, 337.5),(30, 315),(30, 292.5),(30, 270),(30, 112.5),(30, 135),(30, 157.5),(30, 180),(30, 202.5),(30, 225),(30, 247.5)]
+    
    
     def initTables(self):
         #min and max are basically useless, but im including it just incase someone wants it for some reason.
@@ -294,7 +310,93 @@ class DB:
                     Also, notice "positions." can be omitted from "positions.start"
                         since the query deals with only one table.
     '''
-    def get(self, one, two = "", where={}, limit="", alert=False, count=False):
+    def get(self, one, two="", **kwargs):#, two = "", where={}, limit="", alert=False, count=False):
+        opt = {"in":"", "where":{}, "limit":"", "count":False, "rep":0, "slewing":None, "between":None, "alert":False}
+        opt.update(kwargs)
+        
+        #todo: translate this to **kwargs stile...
+        start = time.time()
+        single = ("lt", "lt")
+        double = ("start", "end")
+        vals = {"cloud":single, "glow":single, "positions":double, "passes":double, "nights":double}
+        #unfortunately vals.keys() wont work, because it doesn't retain its order.
+        chain = ["cloud", "glow", "positions", "passes", "nights"]
+        #store some common abreviations that can be used as an alternative to the full table name...
+        alias = {"cld":"cloud", "sky":"glow", "glw":"glow", "position":"positions", "pos":"positions", "pass":"passes", "pas":"passes", "night":"nights", "nit":"nights"}
+        if two == "":
+            two = one
+        #this will attempt to set the value of "one" to "alias[one]", otherwise set it to w/e it already is...
+        one = alias.get(one, one)
+        two = alias.get(two, two)
+        
+        if not self.tables.has_key(one):
+            raise RuntimeError("get: Table `%s` does not exsist, check your query."%one)
+        if not self.tables.has_key(two):
+            raise RuntimeError("get: Table `%s` does not exsist, check your query."%two)
+        if opt['count']:
+            query = "select count(*) as count,"+one+".rowid from "+one
+        else:
+            if two == "positions":#use position's azel...
+                query = "select "+one+".*,"+one+".rowid,"+two+".az,"+two+".el from "+one
+            else:
+                query = "select "+one+".*,"+one+".rowid from "+one
+
+        if type(opt['where']) == dict:
+            def span(table):
+                return self.tables[table]['span']
+            #where = where.copy() #it passes by reference, and im destroying values...
+            wherestr = ""
+            if opt['slewing'] != None:
+                if two == "positions":
+                    if opt['slewing']:
+                        wherestr += two+".az = 361 and "+two+".el = 361 and "
+                    else:
+                        wherestr += two+".az != 361 and "+two+".el != 361 and "
+                else:
+                    #`positions` is the only table with accurate slewing information...
+                    raise RuntimeError("get: Cannot use 'slewing' flag unless in='positions'...")
+            
+            if opt['rep']:
+                middle = "ROUND(("+two+"."+span(two)[0]+"+"+two+"."+span(two)[1]+")/2, 0)"
+                wherestr += one+"."+span(one)[0]+" <= "+middle+" and "+one+"."+span(one)[1]+" >= "+middle+" and "
+            elif one != two:
+                small = one
+                big = two
+                if chain.index(one) > chain.index(two):
+                    big = one
+                    small = two
+                wherestr += small+"."+span(small)[0]+" >= "+big+"."+span(big)[0]+" and "+small+"."+span(small)[1]+" <= "+big+"."+span(big)[1]+" and "
+            
+            if opt['between']:
+                if (type(opt['between']) == tuple or type(opt['between']) == list):
+                    wherestr += two+"."+span(two)[0]+" >= "+str(opt['between'][0])+" and "+two+"."+span(two)[1]+" <= "+str(opt['between'][1])+" and "
+            wherestr += self.sqlDataString(opt['where'], prefix=two, delim=" and ")
+            if wherestr[-5:] == " and ":
+                wherestr = wherestr[:-5]
+        else:
+            wherestr = opt['where']
+        if one != two:
+            query += ","+two
+            if wherestr == "":
+                raise RuntimeError("Get: Cant process two tables with no condition.")
+        if wherestr != "":
+            query += " where "+wherestr
+            
+        if opt['limit'] != "":
+            query += " limit %s"%opt['limit']
+            
+        if self.debug:
+            print query
+        if opt['alert']:
+            self.timestamp("\tQuery Done.", start)
+        if opt['count']:
+            return self.query(query)[0]['count']
+        else:
+            return self.query(query)
+
+    #deprecated
+    def get2(self, one, two = "", where={}, limit="", alert=False, count=False):
+        #todo: translate this to **kwargs stile...
         start = time.time()
         single = ("lt", "lt")
         double = ("start", "end")
@@ -386,7 +488,6 @@ class DB:
             return None
 
     def getStats(self, start, end, table = "glow"):
-        #TODO:: THIS NEEDS TO GET FIXED TO WORK WITH THE NEW SYSTEM...
         startvar = self.tables[table]['span'][0]
         endvar = self.tables[table]['span'][1]
         query = "select "
@@ -444,7 +545,7 @@ class DB:
         self.findFiles()
         self.doFrames("glow", rebuild)
         self.doFrames("cloud", rebuild)
-        #self.process()
+        self.process()
         now = ((time.time() - start)/60)
         self.timestamp("*Hard drive indexing complete!", start)
         return self #allows for chaining
@@ -491,12 +592,13 @@ class DB:
         self.c.execute("create table if not exists `glow` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
         lastlt = 0
         for i,img in enumerate(self.skyimgs):
-            uadata = ud.UAVData(img)
-            print "Reading file #%s (Data Entries: %s)"%(i+1 , len(uadata))
+            self.ualoc = img
+            self.uadata = ud.UAVData(self.ualoc)
+            print "Reading file #%s (Data Entries: %s)"%(i+1 , len(self.uadata))
             #positions = dict()
             then = time.time()
-            for x in range(len(uadata)):
-                d = uadata.frame(x)
+            for x in range(len(self.uadata)):
+                d = self.uadata.frame(x)
                 az = d['TargetAzimuth']
                 el = d['TargetElevation']
                 lt = d['LTime']
@@ -527,56 +629,6 @@ class DB:
         self.timestamp("Frames done!", start)
         return self #allows for chaining
 
-    #this version saves time by skipping ahead 50 frames per second...
-#    def doFrames(self, rebuild = False):
-#        #TODO::Devise a better means of detecting if a file is already indexed. It might get stopped in the middle of indexing...
-#        #        also: Simple solution is to check the db for the file path.
-#        start = time.time()
-#        print "Building frames data"
-#        if rebuild:
-#            self.c.execute("drop table if exists glow")
-#        self.c.execute("create table if not exists `glow` (lt SMALLINT UNIQUE, ms SMALLINT, az SMALLINT, el SMALLINT, file TEXT, ix INT, mean FLOAT, std FLOAT, min SMALLINT, max SMALLINT)")
-#        lastlt = 0
-#        for i,img in enumerate(self.skyimgs):
-#            then = time.time()
-#            uadata = ud.UAVData(img)
-#            print "Reading file #%s (Data Entries: %s)"%(i+1 , len(uadata))
-#            x=0
-#            #Saves time by skipping about 56 frames, with the assumption that the LT hasn't changed.
-#            while x < len(uadata): #by using a while loop i can skip some of the indicies...
-#                d = uadata.frame(x)
-#                az = d['TargetAzimuth']
-#                el = d['TargetElevation']
-#                lt = d['LTime']
-#                ms = d['MSTime']
-#                #this should take a frame every second
-#                if lastlt != lt:
-#                    #i need some means of detecting that the file has already been read
-#                    #only check the first few values, don't bother checking after that...
-#                    if x < 125 and not rebuild:#this LT is already in the db
-#                        check = self.get("glow", where={"lt":lt, "ms":ms}, limit=1)
-#                        if check:
-#                            print "\t", op.basename(img), "appears to already be indexed."
-#                            break; #we don't need to do this file...
-#                    dtfl = np.array(d['Data'], dtype='float32')
-#                    tmean = dtfl.mean()*self.irradpcount
-#                    tstd = dtfl.std()*self.irradpcount
-#                    tmin = int(dtfl.min()*self.irradpcount)
-#                    tmax = int(dtfl.max()*self.irradpcount)
-#                    values = [lt, ms, az, el, img, x, tmean, tstd, tmin, tmax]
-#                    #print values
-#                    self.c.execute("insert or ignore into `glow` (lt,ms,az,el,file,ix,mean,std,min,max) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
-#                    x += 57 #skip ahead a few shy of 60 frames since the camera is recording 60 fps
-#
-#                lastlt = lt
-#                x+=1
-#            self.timestamp("File %s of %s is done."%(i+1, len(self.skyimgs)), then, len(self.skyimgs)-1-i)
-#            sys.stdout.flush()
-#        # Save (commit) the changes
-#        self.conn.commit()
-#        self.timestamp("Frames done!", start)
-#        return self #allows for chaining
-
     #This should take care of both tables `cloud` and `glow`
     def doFrames(self, table = "glow", rebuild = False):
         start = time.time()
@@ -601,13 +653,14 @@ class DB:
                 continue
             
             then = time.time()
-            uadata = ud.UAVData(img)
-            print "Reading file %s of %s (Data Entries: %s)"%(i+1, len(imgfiles), len(uadata))
+            self.ualoc = img
+            self.uadata = ud.UAVData(self.ualoc)
+            print "Reading file %s of %s (Data Entries: %s)"%(i+1, len(imgfiles), len(self.uadata))
             x=0
-            tenth = int(len(uadata)/10)
+            tenth = int(len(self.uadata)/10)
             #Saves time by skipping about 56 frames, with the assumption that the LT hasn't changed.
-            while x < len(uadata): #by using a while loop i can skip some of the indicies...
-                d = uadata.frame(x)
+            while x < len(self.uadata): #by using a while loop i can skip some of the indicies...
+                d = self.uadata.frame(x)
                 values = {}
                 
                 if not x%(tenth):
@@ -860,11 +913,11 @@ class DB:
 
         def getChain(e, offset):
             if e == empty:
-                return chain[1]
-            i = chain.index(e)
+                return self.azel_chain[1]
+            i = self.azel_chain.index(e)
             if i+offset < 0:
                 return empty
-            return chain[(i+offset)%len(chain)]
+            return self.azel_chain[(i+offset)%len(self.azel_chain)]
         
         print "Cleaning up positions data"
         start = time.time()
@@ -881,7 +934,6 @@ class DB:
         chain += [(60, 90),(60, 45),(60, 0),(60, 315),(60, 270),(60, 135),(60, 180),(60, 225)]
         chain += [(45, 270),(45, 247.5),(45, 225),(45, 202.5),(45, 180),(45, 157.5),(45, 135),(45, 112.5),(45, 90),(45, 292.5),(45, 315),(45, 337.5),(45, 0),(45, 22.5),(45, 45),(45, 67.5)]
         chain += [(30, 90),(30, 67.5),(30, 45),(30, 22.5),(30, 0),(30, 337.5),(30, 315),(30, 292.5),(30, 270),(30, 112.5),(30, 135),(30, 157.5),(30, 180),(30, 202.5),(30, 225),(30, 247.5)]
-                
         
         self.c.execute("select rowid,az,el,count,start,end from `positions` ")
         data = self.sqlDict()
@@ -940,25 +992,25 @@ class DB:
                 
 ##                #this will attempt to guess what the value should be based on the past or upcoming values...
 ##                azel = getAzel(e)
-##                if passnum > 4 and not azel in chain:
+##                if passnum > 4 and not azel in self.azel_chain:
 ##                    nnazel = getAzel(nne)
 ##                    ppazel = getAzel(ppe)
 ##                    
 ##                    use = {}
-##                    if nnazel in chain and ppazel in chain:
+##                    if nnazel in self.azel_chain and ppazel in self.azel_chain:
 ##                        if ppazel == nnazel:
-##                            if ppazel == chain[0]:#slewing frames
+##                            if ppazel == self.azel_chain[0]:#slewing frames
 ##                                use = ppazel #just make it a slewing frame
 ##                        else:
 ##                            if ppe.get('count') > nne.get('count'):
-##                                use = chain[chain.index(ppazel)+1]
+##                                use = self.azel_chain[self.azel_chain.index(ppazel)+1]
 ##                            else:
-##                                use = chain[chain.index(nnazel)-1]
+##                                use = self.azel_chain[self.azel_chain.index(nnazel)-1]
 ##                        setAzel(e, use)
-##                        elif nnazel in chain:
-##                            use = chain[chain.index(nnazel)-1]
-##                        elif ppazel in chain:
-##                            use = chain[chain.index(ppazel)+1]
+##                        elif nnazel in self.azel_chain:
+##                            use = self.azel_chain[self.azel_chain.index(nnazel)-1]
+##                        elif ppazel in self.azel_chain:
+##                            use = self.azel_chain[self.azel_chain.index(ppazel)+1]
 ##                        
 ##                        #if perm:
 ##                        #    self.c.execute("update `positions` set "+self.sqlDataString(e)+" where rowid=?", (e['rowid'],))
@@ -983,7 +1035,7 @@ class DB:
         self.timestamp("Data cleanup done!", start)
         return self   
     
-    #bleh this is just too hard. The data is too mangledm the logic is too twisted, i'm going back to the old way.
+    #bleh this is just too hard. The data is too mangled and the logic is too twisted, i'm going back to the old way.
     def redoPositions2(self, perm = True):
         def merge(i, direction, bias = "right"):
             use = 0
@@ -1010,7 +1062,7 @@ class DB:
                 if perm:
                     self.c.execute("delete from `positions` where rowid=?",(data[use]['rowid'],))
                 del data[use]
-        #TODO::TEST THIS NEW SYSTEM... IT NEEDS WORK
+
         print "Cleaning up positions data"
         start = time.time()
 
@@ -1081,11 +1133,11 @@ class DB:
 
         def getChain(e, offset):
             if e == empty:
-                return chain[1]
-            i = chain.index(e)
+                return self.azel_chain[1]
+            i = self.azel_chain.index(e)
             if i+offset < 0:
                 return empty
-            return chain[(i+offset)%len(chain)]
+            return self.azel_chain[(i+offset)%len(self.azel_chain)]
         
         #for i, e in enumerate(data):
         i=0
@@ -1098,7 +1150,7 @@ class DB:
             pazel = getAzel(pe)
             ppazel = getAzel(ppe)
             nazel = getAzel(ne)
-            #print listGet(chain, azel), azel
+            #print listGet(self.azel_chain, azel), azel
                 
             if pazel == slewing:
                 expected = getChain(ppazel, 1)
@@ -1111,7 +1163,7 @@ class DB:
             same = doCheck(data, i, pazel) #check for more of the same
             findslewing = doCheck(data, i, slewing) #it is followed by a slewing fame...
             findnext = doCheck(data, i, nazel)
-            print listGet(chain,ppazel), listGet(chain,pazel), listGet(chain,azel), "expecting:", chain.index(expected), "we have:", listGet(chain,azel), "len:", e['count']
+            print listGet(self.azel_chain,ppazel), listGet(self.azel_chain,pazel), listGet(self.azel_chain,azel), "expecting:", self.azel_chain.index(expected), "we have:", listGet(self.azel_chain,azel), "len:", e['count']
 
             if nazel == pazel:
                 if azel != expected or e['count'] <= ne['count']:
@@ -1137,17 +1189,17 @@ class DB:
                 #azel = pazel
                 
 ##            if azel != expected:# or azel == slewing:
-##                #print listGet(chain,ppazel), listGet(chain,pazel), listGet(chain,azel)
+##                #print listGet(self.azel_chain,ppazel), listGet(self.azel_chain,pazel), listGet(self.azel_chain,azel)
 ##                
 ##                if azel != pazel and azel != nazel: #these should be fine...
 ##                    if same and not pazel == slewing and hasslewing < hasnext: #There is more of the same position coming up, and there is still 
 ##                        azel = pazel
-##                    elif hasnext or not azel in chain: #we can find the next value in this chain or the value is invalid so just assign it to best guess...
+##                    elif hasnext or not azel in self.azel_chain: #we can find the next value in this self.azel_chain or the value is invalid so just assign it to best guess...
 ##                        azel = expected
             
 
             #setAzel(e, azel)
-                #print "new value:", chain.index(azel)
+                #print "new value:", self.azel_chain.index(azel)
             #ppazel = pazel
             #pazel = azel
             i+=1
@@ -1217,8 +1269,21 @@ class DB:
         start = time.time()
         print "*Writing data products."
         self.makeDetails()
-        self.makePosImgs()
-        self.makePassCollages()
+        #position images
+        self.makeImages(ptable="night")
+        self.makeImages(ptable="pass")
+        self.makeImages(ptable="glow")
+        #self.makeImages(ptable="glow")
+        self.makeImages(table="cloud")
+        #collages
+        self.makeCollages(ptable="night")
+        self.makeCollages(ptable="pass")
+        self.makeCollages(ptable="glow")
+        
+        #video
+        #self.makeImages(rep=0, dir={'temp':1,'azel':1})
+        self.makeVideo()
+        
         self.timestamp("*Data products done!", start)
 
     def makeDetails(self, fileloc = "detaildata.txt"):
@@ -1235,7 +1300,7 @@ class DB:
             udir = self.getNightPath({'lt':n['start']}, "documents")# op.join(self.rootdir, "dataproducts")
             tfile = open(op.join(udir, fileloc), "w")
             tfile.write(legend)#write the legend
-            for f in self.get("glow", "positions", where={"slewing":0, "between":(n['start'], n['end'])}):
+            for f in self.get("glow", "positions", slewing=0, between=(n['start'], n['end'])):
                 dat = self.getFrameInfo(f['lt'])
                 vals = [] #need to do it one at t a time if i want it in order...
                 if dat: #if the thing is empty the loop will have problems...
@@ -1248,155 +1313,249 @@ class DB:
             tfile.close()
         self.timestamp("Details done!", start)
 
-    #available options
-    #table
-    #ptable
-    def makeImages(self, opt={}):
+    def makeImages(self, **kwargs):#scaleby="pass", table = "glow", imgfilter="regular", opt={}):
         start = time.time()
-        print "Writing position images (scaled by %s)."%scaleby
-        #need to loop through the different nights in order to scale it using that nights average...
-        table = opt.get('table', 'glow')
-        ptable = opt.get('ptable', 'pass')
-        imgfilter = opt.get('filter', 'regular')
-        scale = [{}]
-        if scaleby:
-            scale = self.get(scaleby) #this will break up the frames by pass, or night
-        for i,s in enumerate(scale):
-            p_start = time.time()
-            frames = self.get(table, "positions", {'rep':1, 'slewing':0, 'between':(s['start'],s['end'])})
-            print "\tWriting %s frames."%len(frames)
-            imgs = (table, frames)
-            parent = (scaleby, s)
-            imgfilter = "regular"
-            for f in frames:
-                tabletype = table+"-images"
-                fileloc = op.join(self.getNightPath(f['lt'], table+"-images", imgfilter+"-"+scaleby), self.getFilename(f['lt']))
-                self.getImg(f, imgfilter, s, opt).save(fileloc)
-            self.timestamp("\t%s frames done. (%s/%s)"%(len(frames), i+1, len(scale)), p_start, len(scale)-1-i)
+        
+        opt = {"type":"images", "filter":"regular", "table":"glow", "ptable":"pass"}#, "table":table, "ptable":scaleby}
+        opt.update(kwargs)
+        paths = []
+        
+        print "Writing %s position images, scaled by %s."%(opt['filter'],opt['ptable'])
+        scale = [{}] #default is to have no scaling
+        if opt['table'] != opt['ptable']:
+            scale = self.get(opt['ptable']) #this will break up the frames by pass, or night        #ex: need to loop through the different nights in order to scale it using that nights average...
+        for si,s in enumerate(scale):
+            s_start = time.time()
+            #frameopt = {'rep':1, 'slewing':0}
+            between = None
+            if s: #if im applying a scale...
+                between = (s['start'],s['end'])
+                opt['pdata'] = s
+            frames = self.get(opt['table'], "positions", between=between, rep=opt.get('rep', 1), slewing=opt.get('slewing', 0))
+            print "\tWriting %s frames (%s/%s)."%(len(frames), si+1, len(scale))
+            elapsed = time.time()
+            for fi, f in enumerate(frames):
+                if time.time()-elapsed >= 60:#about every 90 seconds
+                    elapsed = time.time()
+                    print "\t\tWorking on frame %s of %s (%s more)."%(fi, len(frames), len(frames)-fi)
+                opt['data']=f
+                fileloc = self.getFileLoc(**opt)
+                self.getImg(**opt).save(fileloc)
+                paths.append(fileloc)
+            self.timestamp("\t%s frames done."%(len(frames)), s_start, len(scale)-1-si)
         self.timestamp("Position images done!", start)
+        #return paths
 
-    def makeCollages(self, table = "glow", scaleby = "pass", opt={}):
+    def makeCollages(self, **kwargs):#, scaleby = "pass", table = "glow", opt={}):
         start = time.time()
-        print "Writing per pass collages (scaled by %s)."%scaleby
+        
+        opt = {"type":"collages", "filter":"regular", "table":"glow", "ptable":"pass", "check":True}
+        opt.update(kwargs)
+        print "Writing collages (scaled by %s)."%opt['ptable']
+        
         passes = self.get("passes")
         for i,p in enumerate(passes):
             p_start = time.time()
             s = p
-            if scaleby:
-                s = self.get(scaleby, "passes", {"rowid":p['rowid']})
+            if opt['ptable'] != "pass":
+                opt['pdata'] = self.get(opt['ptable'], "passes", where={"rowid":p['rowid']})[0]
             #this will produce representative (non slewing) frames from every position within this pass.
-            frames = self.get(table, "positions", {'rep':1, 'slewing':0, 'between':(p['start'],p['end'])})
-            fileloc = op.join(self.getNightPath(f['lt'], table+"-collages", imgfilter+"-"+scaleby), self.getFilename(f['lt']))
-            opt['check'] = opt.get('check', fileloc)
-            for x in frames:
-                
-            self.getCollage(frames, s, "regular", {"check":opt}).save(fileloc)
+            frames = self.get(opt['table'], "positions", between=(p['start'],p['end']), rep=1, slewing=0)
+            #fileloc = op.join(self.getNightPath(f[0]['lt'], table+"-collages", imgfilter+"-"+scaleby), self.getFilename(f[0]['lt']))
+            opt['data'] = frames #passing all of the frames... later processes are expecting only one frame...
+            #tell it explicitly what lt to use... since it is recieving multiple frames it cant determine lt on its own
+            fileloc = self.getFileLoc(lt=frames[0]['lt'],**opt)
+            self.getCollage(**opt).save(fileloc)
             self.timestamp("\tCollage %s of %s done."%(i+1, len(passes)), p_start, len(passes)-1-i)
         self.timestamp("Pass collages done!", start)
     
-    def makeVideo(self):
+    def makeVideo(self, **kwargs):#scaleby = "pass", table = "glow", opt={}):
         #video for each position per night
         #temp folder
         #    |--azel
         #        '-files from each pass
-        #    |
-        #TODO:: WORK ON VIDEO PRODUCTION
-        table = "glow"
-        entries = self.get(table)#, where={"between":(n["start"],n["end"])})
-        #this'll take a while...
-        paths = self.writeImg(entries, table, "images", "regular", opt={"temp":1,"useazel":1})
+
+        opt = {"type":"images", "filter":"regular", "table":"glow", "ptable":"night", "check":1}
+        opt.update(kwargs)
+        vidOpt = opt.copy()
+        vidOpt.update({"type":"videos"})
+        imgOpt = opt.copy()
+        imgOpt.update({"type":"images", "dir":{"temp":1, "azel":1}})
         
-        nights = self.get("nights")
-        for n in nights:
-            op.join(self.rootdir, "dbProducts", n['night'], "temp")
+        #nights = self.get("nights")
+        scale = self.get(opt['ptable'])
+        for s in scale:
+            frames = self.get(opt['table'], "positions", slewing=0, between=(s['start'], s['end']))#, where={"between":(n["start"],n["end"])})
+            #this'll take a while...
+            paths = set()
+            print "writing %s frames..."%len(frames)
+            for i,f in enumerate(frames):
+                if not (i%250) and i:
+                    print "\t 250 done, %s left..."%(len(frames)-i,)
+                imgOpt.update({"data":f, "pdata":s})
+                fileloc = self.getFileLoc(**imgOpt)
+                self.getImg(**imgOpt).save(fileloc)
+                paths.add(op.dirname(fileloc))
+            #print paths
+            vidOpt['lt']=s['start'] #used for making the path
+            for path in paths:
+                azelstr = op.basename(path)
+                vidOpt['name']={"azel":azelstr}
+                fileloc = self.getFileLoc(**vidOpt)
+                self.writeVid(path, fileloc)
+                
+            #op.join(self.rootdir, "dbProducts", n['night'], "temp")
                 
         #path = self.getNightPath(opt, op.join())
         #loc = op.join(self.getNightPath(opt), "temp", "images", azel, self.getFilename(this_opt)) 
     
-    #options:
-    #temp - makes a temporary path
-    #fullpath - skips everything, just returns this...
-    #fulldir - uses this as the directory, and appends a filename
-    #args:
-    #table - this will be used to distinguish between cloud data and skyglow data...
-    #imgtype - "image", "collage", ...
-    #imgfilter - "regular", "nostar", ...
-    getImg(f, imgfilter, s, opt)
-    def getImgLoc(self, lt, imgfilter, opt={}):
-        if opt.get('fullpath'):
-            return opt.get('fullpath')
-        elif opt.get('fulldir'):
-            op.join(opt.get('fulldir'), self.getFilename(entry, opt))
-        fulldir = self.getNightPath(entry, opt)
-        if opt.get('temp'):
-            fulldir = op.join(fulldir, "temp")
-        fulldir = op.join(fulldir, table+"-"+imgtype, imgfilter)
-        if opt.get("useazel"):
-            fulldir = op.join(fulldir, entry['az']+entry['el'])
-        if not op.isdir(fulldir):
-              os.makedirs(fulldir)
-        return op.join(fulldir, self.getFilename(entry, opt))
 
-    #options
-    #name - override the regerated name with this
-    def getFilename(self, lt, *args):
-        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(lt))
-            #if opt.get('ms'):
-            #    opt['name'] += '-'+str(opt['ms'])
-        for a in args:
-            name += '-'+a#str(opt.get('sigma', self.default_sigma))        
-        return name + ".png"
-
-    def getNightPath(self, lt, *args):
-        nit = dbtime.dbtime(lt)
-        nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
-        nightdir = op.join(self.rootdir, "dbProducts", nit.strftime("%Y%m%d"))
-        for a in args:
-            nightdir = op.join(nightdir, a)
-        if not op.isdir(nightdir):
-          os.makedirs(nightdir)
-        return nightdir;#op.join(filterdir, opt['name'])
+    def getFileName(self, **kwargs):
+        nameopt = {"azel":False}
+        nameopt.update(kwargs.get('name', {}))
+        name = ""
+        entry = kwargs.get('data', {})
+        if type(entry) == list: #if we have a list of entries, use the first one
+                entry = entry[0]
+        utime = kwargs.get('lt', entry.get('lt', 0))
+        name += time.strftime("%Y%m%d-%H%M%S", time.localtime(utime))
+        if nameopt['azel']:
+            name += "-"
+            if type(nameopt['azel']) == str:
+                name += nameopt['azel']
+            else:
+                name += "%s_%s"%(kwargs['data']['az'],kwargs['data']['el'])
+        if kwargs['type'] == "videos":
+            return name + ".avi"
+        else:
+            return name + ".png"
+    
+    def getFileDir(self, **kwargs):
+        diropt = {"night":True, "azel":False, "temp":False}
+        diropt.update(kwargs.get('dir', {}))
+        dir = op.join(self.rootdir, "dbProducts")
+        entry = kwargs.get('data', {})
+        if type(entry) == list: #if we have a list of entries, use the first one
+            entry = entry[0]
+        utime = kwargs.get('lt', entry.get('lt', 0))
+        if diropt['night'] and utime:
+            nit = dbtime.dbtime(utime)
+            nit['hours'] -= 12 #shifting the hours by -12 will ensure that its placed in the proper day folder
+            dir = op.join(dir, nit.strftime("%Y%m%d"))
+        if diropt['temp']:
+            dir = op.join(dir, "temp")
+        dir = op.join(dir, kwargs['table']+"-"+kwargs['type'], kwargs['filter']+"-"+kwargs['ptable'])
+        if diropt['azel']:
+            if type(diropt['azel']) == str:
+                dir = op.join(dir, diropt['azel'])
+            else:
+                dir = op.join(dir, "%s_%s"%(entry['az'],entry['el']))
+        if not op.isdir(dir):
+            os.makedirs(dir)
+        return dir;#op.join(filterdir, opt['name'])
+    
+    def getFileLoc(self, **kwargs):
+##        if not op.isdir(fulldir):
+##            os.makedirs(fulldir)
+        return op.join(self.getFileDir(**kwargs), self.getFileName(**kwargs))
+        #return op.join(fulldir, self.getFilename(entry, opt))
 
     '''
-    Given a db "glow" entry, this returns the image data as a PIL.Image.Image...
-    This is also where filters are applied.
+    This is likely the most essential functions of the data production system.
+    It accepts parameters allowing it to extract an image from the raw files, and return a PIL.Image
+    I wrote this function in such a way that it knows where the file will likely be saved.
+    This way, it can attempt to find it, and return the ready made image, instead of rebuilding it.
+    This time savings is very significant for nostar images, however; regular images are trivial to create on the fly.
+    
+    parameters:
+    filter: {nostar|regular|histo|...}
+    data:   this is a single database entry as recieved through the get() function.
+            This works for glow or cloud data.
+    table:   this field defines which table the data belongs to.
+            This is needed for finding the filepath, it is optional.
+    pdata:  this is a db entry for the "parent" node.
+            if specified, this data will be used in scaling the image.
+            Examples include: "position", "pass", "night"
+    ptable: The name of the parent table. [optional: used for finding file-path]
+    check:  {Boolean} This defines whether to check if the file already exsists.
+            This comes with the assumption that the necessary prerequisites are met...
+            See: getFileLoc()
+            
+    --Note--
+        I am having to pass a multitude of values down, creating almost a "global variable" catastrophe.
+        Being able to abstract these data production algorithms from the data aquisition algorithms would probably reduce this.
+        The problem is, the two systems are still rather tied together, and its just easier this way for now. I'm out of time.
     '''
-    def getImg(self, entry, imgfilter = "regular", parent = {}, opt={}):
-        #TODO:: Work on a more sophisticated means of scaling the image data...
+    def getImg(self, **kwargs):# entry, parent = {}, opt={}):
+        opt = {'filter':"regular", 'sigma':self.default_sigma, 'check':False}
+        opt.update(kwargs)
+        opt.update({'type':"images"})
+        if not opt.has_key('pdata'):
+            opt['pdata'] = opt['data']
+        
         filters = {"histo":self.imgHisto, "regular":self.imgRegular, "nostar":self.imgNostar}
-        if not imgfilter.lower() in filters:
-            raise RuntimeError('getImg: Invalid image type. Valid entries:', filters.keys())
+        if not opt['filter'].lower() in filters:
+            raise RuntimeError('getImg: Invalid filter. Valid entries:', filters.keys())
 
         #path = self.filepath(entry, imgfilter, opt)
         #The scaling options might be different, so this might not be a good idea...
-        check = opt.get('check')
-        if check and op.isfile(check):
-            return Image.open(path)
+        #checkloc = op.join(self.getNightPath(entry['lt'], opt.get('table')+"-images", imgfilter+"-"+opt.get('ptable')), self.getFilename(entry['lt']))
+        if opt['check']:
+            checkloc = self.getFileLoc(**opt)
+            if op.isfile(checkloc):
+                if self.debug:
+                    print "file found:", checkloc
+                return Image.open(checkloc)
+            #this will check if it's in the temp directory... might not be necessary...
+            tempopt = opt.copy()
+            tempopt.update({'dir':{"azel":1, "temp":1}})
+            temploc = self.getFileLoc(**tempopt)
+            #print temploc
+            if op.isfile(checkloc):
+                if self.debug:
+                    print "file found:", checkloc
+                return Image.open(checkloc)
+
+##        if opt['check']:
+##            check = opt.copy()
+##            for x in range(1):
+##                check.update({"temp":x, "useazel":0})
+##                checkloc = self.getFileLoc(entry, parent, opt=check)
+##                if checkloc and op.isfile(checkloc):
+##                    return Image.open(checkloc)
+##            check.update({"temp":1, "useazel":1})
+##            checkloc = self.getFileLoc(entry, parent, opt=check)
+##            if checkloc and op.isfile(checkloc):
+##                return Image.open(checkloc)
         
         #open the file
-        uadata = ud.UAVData(entry['file'])
-        fm = uadata.frame(entry['ix'])
+        #TODO: possibly keep the file open for the next getImg... it might save some time.
+        
+        if self.ualoc != opt['data']['file']: #if the file hasn't changed, don't go reopening it
+            self.ualoc = opt['data']['file']
+            self.uadata = ud.UAVData(opt['data']['file'])
+        fm = self.uadata.frame(opt['data']['ix'])
         #make it into a numpy array
         dtfl = np.array(fm['Data'], dtype='float32')
         dtfl *= self.irradpcount
         dtfl.shape = (fm['FrameSizeY'], fm['FrameSizeX'])
 
-        opt = opt.copy() #don't change the original
         #determine scaling options
-        if not parent:
-            parent = entry
+        parent = opt['pdata']
 
-        #this is the basic scaling option...
         if not opt.has_key('min') and not opt.has_key('max'):
-            opt['sigma'] = opt.get('sigma', self.default_sigma)
-            opt['min'] = parent['min_mean']-parent['std']*opt['sigma']
-            opt['max'] = parent['max_mean']+parent['std']*opt['sigma']
+            buff = parent['std']*opt['sigma']
+            opt['max'] = parent['mean']+buff
+            opt['min'] = parent['mean']-buff
+            if parent.has_key('max_mean'): #The new scaling option: This is better...
+                opt['max'] = parent['max_mean']+buff
+                opt['min'] = parent['min_mean']-buff
             #    opt['min'] = dtfl.mean()-dtfl.std()*opt['sigma']
             #    opt['max'] = dtfl.mean()+dtfl.std()*opt['sigma']
         if opt['min'] < 0:
             opt['min'] = 0
         
-        use = filters[imgfilter](dtfl, opt) #apply the appropriate filter
+        use = filters[opt['filter']](dtfl, opt) #apply the appropriate filter
 
         #use = np.clip(dtfl,opt['mean']-opt['std']*opt['sigma'],opt['mean']+opt['std']*opt['sigma'])
         
@@ -1405,7 +1564,9 @@ class DB:
             ax = fig.add_subplot(111)
         
             ax.plot(use)
-            stats = opt.get('parent', entry)
+            stats = opt['data']
+            if parent:
+                stats = parent
             ax.plot([stats['mean']+stats['std']]*len(use), linewidth=2, color="b")
             ax.plot([stats['mean']-stats['std']]*len(use), linewidth=2, color="b")
     
@@ -1419,11 +1580,19 @@ class DB:
         use = self.imgScale(use, opt['min'], opt['max'])
         return Image.fromarray(np.array(use, dtype='uint8'))
 
-    def getCollage(self, entries, imgfilter = "regular", parent={}, opt = {}):
+    '''
+    Similar to getImg, this accepts a list of db entries, and attempts to make a collage out of them.
+    This function accepts everything that getImg accepts, and it will pass those parameters down, 
+    when it looks for the necessary image files.
+    '''
+    def getCollage(self, **kwargs):#entries, parent={}, opt = {}):
+        opt = {'filter':"regular", 'sigma':self.default_sigma, 'check':True}
+        opt.update(kwargs)
+        opt.update({'type':"collages"})
+        entries = opt['data']
         if type(entries) != list:
-            raise RuntimeError("getCollage: \"entires\" must be a list of db entries.")
-        opt = opt.copy()
-       
+            raise RuntimeError("getCollage: \"entries\" must be a list of db entries.")
+        
         #somewhat cheap hack for now:
         dimentions = (2940,2940)
         
@@ -1431,21 +1600,23 @@ class DB:
         imgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 14)
         gradFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 20)
         bigimgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 42)
-                
+
         bigimg = Image.new('RGB', dimentions)
-        origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image        
-        for e in entries:#pas:
-            img = self.getImg(e, imgfilter, parent, opt)
+        origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image
+        for e in entries:
+            imgOpt = opt.copy()
+            imgOpt['data'] = e #just send down one frame...
+            if not opt.has_key('pdata'):
+                imgOpt['pdata'] = imgOpt['data']
+            parent = imgOpt['pdata']
+            img = self.getImg(**imgOpt)
             imcl = img.convert('RGBA')
             #f = ImageFont.load_default()
 
             d = ImageDraw.Draw(imcl)
             d.text( (0, 0), u'{0} ({1}, {2})'.format(round(e['mean'], 2), round(e['az'], 1), round(e['el'], 1)), font=imgFont, fill='#00ff00')
     
-            #rotation = 0
-            #if p['el'] != 90:
-                #rotation = -(p['az']-90)
-            info = self.get("positions", "glow", {"lt":e['lt']})[0]
+            info = self.get("positions", "glow", where={"lt":e['lt']})[0]
             rotation = -(info['az']-90)
             imcl = imcl.rotate(rotation, expand = 1)
 
@@ -1464,8 +1635,9 @@ class DB:
         end = dbtime.dbtime(e['lt'])
         timestr = start.strftime("%Y-%m-%d")+" ("+start.strftime("%H:%M:%S")+" - "+end.strftime("%H:%M:%S")+")"
          #get an aproximate size
+        
         legend = [timestr]
-        if parent: #give the parent's statistics
+        if imgOpt['table'] != imgOpt['ptable']:
             for x in ['mean', 'std', 'min', 'max']:
                 val = round(parent[x], 3)
                 if val == 0:
@@ -1479,87 +1651,17 @@ class DB:
         
         #display the gradient if there a uniform scale applied...
         if parent:
-            sigma = opt.get('sigma', self.default_sigma)
-            buff = parent['std']*sigma
-            tmax = parent['max_mean']+buff
-            tmin = parent['min_mean']-buff
+            buff = parent['std']*opt['sigma']
+            tmax = parent['mean']+buff
+            tmin = parent['mean']-buff
+            if parent.has_key('max_mean'): #The new scaling option: This is better...
+                tmax = parent['max_mean']+buff
+                tmin = parent['min_mean']-buff
             grad = self.makeGradient(40, 600, parent['mean'], parent['std'], tmin, tmax, font=gradFont)
             bigimg.paste(grad, (10,10))
         #bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
         #sys.stdout.flush()
         return bigimg
-
-    def writeCollage(self, table, entries, imgfilter = "regular", opt = {}):
-        if type(entries) != list:
-            raise RuntimeError("writeCollage: \"entires\" must be a list of db entries.")
-        opt = opt.copy()
-        path = self.getImgPath(table, entries[0], "collages", imgfilter, opt)
-        
-        #somewhat cheap hack for now:
-        dimentions = (2940,2940)
-        
-        #monofontbg = ImageFont.load_default()
-        imgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 14)
-        gradFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 20)
-        bigimgFont = ImageFont.truetype('Droid-Sans-Mono.ttf', 42)
-                
-        bigimg = Image.new('RGB', dimentions)
-        origin = (dimentions[0]/2, dimentions[0]/2) #middle of the image        
-        for e in entries:#pas:
-            img = self.getImg(e, imgfilter, opt)
-            imcl = img.convert('RGBA')
-            #f = ImageFont.load_default()
-
-            d = ImageDraw.Draw(imcl)
-            d.text( (0, 0), u'{0} ({1}, {2})'.format(round(e['mean'], 2), round(e['az'], 1), round(e['el'], 1)), font=imgFont, fill='#00ff00')
-            #imcl.show()
-    
-            #rotation = 0
-            #if p['el'] != 90:
-                #rotation = -(p['az']-90)
-            info = self.get("positions", "glow", {"lt":e['lt']})[0]
-            rotation = -(info['az']-90)
-            imcl = imcl.rotate(rotation, expand = 1)
-            #imcl.show()
-            w,h = imcl.size
-            #distance from the origin is related to the elevation
-            distance = (90-info['el'])*22
-            #imcl.show()
-            #this code will get the distance from the origin...
-            # the "- x/2" part is adjusting for the center of imcl,
-            nx = int(origin[0] + math.cos(info['az']*math.pi/180)*distance - w/2)
-            ny = int(origin[1] + math.sin(info['az']*math.pi/180)*distance - h/2)
-            bigimg.paste(imcl, (nx,ny), imcl) #it expects integers...
-        
-        d = ImageDraw.Draw(bigimg)
-        start = dbtime.dbtime(entries[0]['lt'])
-        end = dbtime.dbtime(e['lt'])
-        timestr = start.strftime("%Y-%m-%d")+" ("+start.strftime("%H:%M:%S")+" - "+end.strftime("%H:%M:%S")+")"
-         #get an aproximate size
-        legend = [timestr]
-        for x in ['mean', 'std', 'min', 'max']:
-            val = round(opt['parent'][x], 3)
-            if val == 0:
-                val = "N/A"
-            legend += ["%s: %s"%(x, val)]
-            
-        fontH = bigimgFont.getsize("0")[1]    
-        for i,e in enumerate(legend):
-            d.text((140, 10+((fontH+10)*i)), e, font=bigimgFont, fill='#00ff00')
-        #d.text((120, 40), "Mean: %s"%(opt['mean']), font=bigimgFont, fill='#00ff00')
-        
-        #display the gradient if there a uniform scale applied...
-        if opt.has_key('parent'):
-            sigma = opt.get('sigma', self.default_sigma)
-            buff = opt['parent']['std']*sigma
-            tmax = opt['parent']['max_mean']+buff
-            tmin = opt['parent']['min_mean']-buff
-            grad = self.makeGradient(40, 600, opt['parent']['mean'], opt['parent']['std'], tmin, tmax, font=gradFont)
-            bigimg.paste(grad, (10,10))
-        #bimnm = 'nightscaled-collage-{1}{2:0>2}{3:0>2}-{4:0>2}{5:0>2}{6:0>2}-{0:0>3}.png'.format(p['passid'], p['date_year'], p['date_month'], p['date_day'], p['date_hours'], p['date_minutes'], p['date_seconds'])
-        #sys.stdout.flush()
-
-        bigimg.save(path)
 
     def makeGradient(self, width=20, height=400, tmean=4, tstd=.5, tmin=0, tmax=10, font=None):
         use = np.array(range(255,0,-1), dtype='uint8')
@@ -1592,7 +1694,35 @@ class DB:
         return ret
         #im.save(sys.stdout, "PNG")
 
-    def writeVid(self, imgdir, viddir = ''):
+    def writeVid(self, imgdir, fileloc):
+        if not op.isdir(imgdir):
+            raise RuntimeError('writeVid: imgdir dne: ', imgdir)
+        imgsglb = op.join(imgdir, '*.png')
+        if len(glob.glob(imgsglb)) == 0:
+            raise RuntimeError('createposnvideos: no files in imgdir')
+##        imgpths.sort()
+##        imgbnm = op.basename(imgpths[0])
+##        imgprf = imgbnm[:16]
+
+        cmnd = [r'/usr/bin/mencoder']
+        mfarg = [r'mf://' + imgsglb]
+        fparg = ['-mf', 'fps=10']
+        otarg = ['-o', fileloc]
+        enarg = ['-ovc', 'lavc', '-lavcopts', 'vcodec=msmpeg4v2:vbitrate=200']
+        args = cmnd + mfarg + fparg + otarg + enarg
+        print("command:", reduce(lambda a,b: a+" "+b, args))
+        sys.stdout.flush()
+
+        try:
+            subprocess.check_call(args)
+        except subprocess.CalledProcessError:
+            print('writeVid: FAILURE')
+            #print('createposnvideos: CalledProcessError on azel: ', azel)
+        else:
+            print('writeVid: SUCCESS')
+        return self #allows for chaining
+
+    def writeVid2(self, imgdir, viddir = ''):
         if viddir == '':
             viddir = imgdir
         if not op.isdir(imgdir):
