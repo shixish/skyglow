@@ -85,6 +85,7 @@ class DB:
         one = ("lt", "lt")
         two = ("start", "end")
         single = {"lt":"SMALLINT UNIQUE", "ms":"SMALLINT"}
+        #orig = {"olt":"SMALLINT UNIQUE", "oms":"SMALLINT"}
         multi = {"start":"INT", "end":"INT"}
         stats = {"mean":"FLOAT", "std":"FLOAT", "min":"FLOAT", "max":"FLOAT"}
         #multistats = {"mean":"FLOAT", , "std":"FLOAT", "min":"FLOAT", "max":"FLOAT"}
@@ -104,11 +105,13 @@ class DB:
         derived.update(multi)
         derived.update(multistats)
         
-        self.tables['cloud'] = {"fps":1, "files":[], "span":one}
+        #offset is for converting between UTC and Localtime...
+        self.tables['cloud'] = {"fps":1, "files":[], "span":one, "offset":0}
         self.tables['cloud']['vals'] = {}
         self.tables['cloud']['vals'].update(basic)
         
-        self.tables['glow'] = {"fps":60, "files":[], "span":one}
+        #time.timezone = 36000
+        self.tables['glow'] = {"fps":60, "files":[], "span":one, "offset":36000}
         self.tables['glow']['vals'] = {}
         self.tables['glow']['vals'].update(basic)
         self.tables['glow']['vals'].update(azel)
@@ -584,6 +587,7 @@ class DB:
     '''
     
     #old slow version, possibly more thorough?
+    #deprecated
     def doFrames2(self, rebuild = False):
         start = time.time()
         print "Building frames data"
@@ -668,7 +672,7 @@ class DB:
                 if lastlt != d['LTime']:#this should take a frame every second
                     values['az'] = d['TargetAzimuth']
                     values['el'] = d['TargetElevation']
-                    values['lt'] = d['LTime']
+                    values['lt'] = d['LTime']-tableinfo.get('offset', 0) #this is used to translate from UTC to Localtime
                     values['ms'] = d['MSTime']
                     values['file'] = img
                     values['ix'] = x
@@ -1315,7 +1319,6 @@ class DB:
 
     def makeImages(self, **kwargs):#scaleby="pass", table = "glow", imgfilter="regular", opt={}):
         start = time.time()
-        
         opt = {"type":"images", "filter":"regular", "table":"glow", "ptable":"pass"}#, "table":table, "ptable":scaleby}
         opt.update(kwargs)
         paths = []
@@ -1332,17 +1335,18 @@ class DB:
                 between = (s['start'],s['end'])
                 opt['pdata'] = s
             frames = self.get(opt['table'], "positions", between=between, rep=opt.get('rep', 1), slewing=opt.get('slewing', 0))
-            print "\tWriting %s frames (%s/%s)."%(len(frames), si+1, len(scale))
-            elapsed = time.time()
-            for fi, f in enumerate(frames):
-                if time.time()-elapsed >= 60:#about every 90 seconds
-                    elapsed = time.time()
-                    print "\t\tWorking on frame %s of %s (%s more)."%(fi, len(frames), len(frames)-fi)
-                opt['data']=f
-                fileloc = self.getFileLoc(**opt)
-                self.getImg(**opt).save(fileloc)
-                paths.append(fileloc)
-            self.timestamp("\t%s frames done."%(len(frames)), s_start, len(scale)-1-si)
+            if frames: #might not have any frames if trying to match cloud data
+                print "\tWriting %s frames (%s/%s)."%(len(frames), si+1, len(scale))
+                elapsed = time.time()
+                for fi, f in enumerate(frames):
+                    if time.time()-elapsed >= 60:#about every 90 seconds
+                        elapsed = time.time()
+                        print "\t\tWorking on frame %s of %s (%s more)."%(fi, len(frames), len(frames)-fi)
+                    opt['data']=f
+                    fileloc = self.getFileLoc(**opt)
+                    self.getImg(**opt).save(fileloc)
+                    paths.append(fileloc)
+                self.timestamp("\t%s frames done."%(len(frames)), s_start, len(scale)-1-si)
         self.timestamp("Position images done!", start)
         #return paths
 
