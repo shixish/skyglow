@@ -25,3 +25,12 @@ I think I worked on this code for about a Month, and was able to produce a prett
 My system turned out to be significantly more efficient then their original code. My system produced higher quality outputs, and ran in significantly less time. My system could process a 2TB harddrive in a couple hours, where the old system used to take all night. The database was stored with the data, so once the index was built, you wouldn't have to rebuild it. I improved the outputs by reducing the errors in the data, and the image output looked a lot better due to my scaling techniques.
 
 I checked in with them a few months later, and they said they were still pleased with my work, and they had continued to use it, and build upon it. One of my advisors, Peter Konohia wrote me a letter of recommendation for my work, see: AndrewLetterOfRecomendation.pdf
+
+Files
+---
+- dataGraph.png - shows a graph of one image. Each line illustrates one row of pixels across the image. Spikes indicate either a bright star, or an erroneous reading. I think the blue bars incidate 1 std from the average, and I think the red bars are 3 (not sure, I don't remember :) I used these types of graphs to help figure out the image scaling.
+
+- dirtyPositions.png - shows a graph of the position metadata. The hight is simply the summation of two position values (I believe it was azimuth and altitude), the horizontal axis represents every image in the database index, organized by time. The tall spikes upward indicate the "slewing frames". The slewing frames are when the camera was moving, to indicate this, the system simply sets the position values to some arbitrary large value. Silly as it sounds, they kept the camera rolling as the robotic arm changed the orientation of the camera, so there are all of these blurred images of smeared stars, etc. I can't imagine they would be useful to the researchers, but I found these frames to be far more interesting to look at. The short sections that look like little steps indicate a section of time where the camera was still, watching the same spot for a few seconds. The blue lines illustrate the corrected values, and the green lines indicate the original values. The green spikes are indicative of an error in the position values (the green line is obscured by the blue line when there are no errors).
+
+- AndrewLetterOfRecomendation.pdf - Letter of recommendation from Peter Konohia, Textron Defense Systems.
+
